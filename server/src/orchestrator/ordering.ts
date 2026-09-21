@@ -173,27 +173,3 @@ export function resequenceAll() {
   const groups = sqlite.prepare('SELECT id FROM groups').all() as { id: number }[];
   for (const g of groups) resequenceGroup(g.id);
 }
-
-// The ordering rules that were previously hard-wired into default_rank, given once as
-// editable conditions. Only ever seeded once, so deleting one stays deleted.
-export function seedDefaultConditions() {
-  const done = sqlite.prepare("SELECT value FROM app_meta WHERE key = 'conditions_seeded'").get();
-  if (done) return;
-  const idOf = sqlite.prepare('SELECT id FROM software_definitions WHERE name = ?');
-  const insert = sqlite.prepare(
-    `INSERT OR IGNORE INTO conditions (type, subject_id, target_id, note, enabled, created_at)
-     VALUES ('start_before', ?, ?, ?, 1, ?)`
-  );
-  const defaults: [string, string, string][] = [
-    ['Keycloak', 'WSO2 API Manager', 'Default rule'],
-    ['Artemis', 'WildFly (JBoss)', 'Default rule'],
-    ['conversion-rules-selector', 'earning-rules-selector', 'Default rule'],
-    ['earning-rules-selector', 'rules-interpreter', 'Default rule'],
-  ];
-  for (const [a, b, note] of defaults) {
-    const subject = idOf.get(a) as { id: number } | undefined;
-    const target = idOf.get(b) as { id: number } | undefined;
-    if (subject && target) insert.run(subject.id, target.id, note, new Date().toISOString());
-  }
-  sqlite.prepare("INSERT INTO app_meta (key, value) VALUES ('conditions_seeded', '1')").run();
-}

@@ -74,11 +74,12 @@ New-Item -ItemType Directory $out, "$out\shared", "$out\server", "$out\web" | Ou
 Copy-Item package.json, package-lock.json, tsconfig.base.json, README.md, DEPLOYMENT.md, .env.example $out
 Copy-Item shared\package.json "$out\shared\";  Copy-Item shared\dist "$out\shared\dist" -Recurse
 Copy-Item server\package.json "$out\server\";  Copy-Item server\dist "$out\server\dist" -Recurse
+Copy-Item server\defaults "$out\server\defaults" -Recurse      # the shipped catalog + conditions
 Copy-Item web\package.json    "$out\web\";     Copy-Item web\dist    "$out\web\dist"    -Recurse
 Compress-Archive "$out\*" healthcheck-1.0.0.zip -Force
 ```
 
-The zip is under 1 MB. **Never** add `server\data`, `.env` or `Services\` to it — they hold your keys,
+The zip is under 1 MB. It **must** contain `server\defaults` (your catalog and conditions). **Never** add `server\data`, `.env` or `Services\` to it — they hold your keys,
 your servers and passwords.
 
 **On the Healthcheck host:**
@@ -174,7 +175,10 @@ The service reads the same `.env`. Restart the service after changing it:
 5. Before trusting a **Start All** in production, try a single **Start / Stop** on a non-critical
    component first.
 
-Each market's log paths and success patterns can differ. Check them once in **Software Catalog**.
+The **software catalog and the conditions arrive with the application** (`server\defaults\defaults.json`):
+a new install already has every component, log path, success pattern and start/stop rule you set up, so
+there is nothing to enter by hand. A market whose paths or names differ can edit them in **Software
+Catalog** / **Conditions**; those local edits are kept when you upgrade.
 
 ---
 
@@ -222,7 +226,10 @@ cd C:\Healthcheck
 nssm start Healthcheck
 ```
 
-The database updates itself on start, and the data folder is untouched.
+The database updates itself on start, and the data folder is untouched. Newer catalog/conditions in the
+release are merged in on start; anything the customer edited or deleted locally is respected (details in
+README, *The catalog and conditions ship with the repo*). To discard local edits and return to the shipped
+catalog and conditions: `npm run defaults:reset`, then restart the service.
 
 ---
 
@@ -256,6 +263,7 @@ Nothing else was installed there.
 | Adding a server says *unreachable* | Wrong host or port, or a firewall between the two machines. Test with `Test-NetConnection <host> -Port 22`. |
 | Adding a server says *authentication failed* | Wrong user name or password for the service account. |
 | Start/Stop fails mentioning sudo or a password | The `NOPASSWD` rule is missing for `systemctl` (section 1). |
+| The catalog and conditions are empty on a new install | The release is missing `server\defaults\defaults.json` (route B zip built without it). The start-up log says *Could not apply the shipped catalog and conditions*. Add the folder and restart. |
 | Every component shows *not installed* | Its systemd unit doesn't exist under the name in the Software Catalog. Check `systemctl list-unit-files`. |
 | A start times out although the service is up | The catalog's *Success pattern* isn't what that log prints. Fix it in Software Catalog, or use **Mark as started** on the running line. |
 | `npm ci` fails behind a company proxy | `npm config set proxy http://proxy:port` and `npm config set https-proxy http://proxy:port`. |

@@ -125,8 +125,9 @@ the group's list); old `/groups/...` links redirect to the server.
 
 The catalog (Software Catalog page) is a shared, reusable list of
 software/jars — what to run to detect it, how to start/stop it, how to tell
-it's healthy, and its log path. It comes pre-loaded with 24 known components,
-each mapped to its systemd unit and its fixed `/Data/logs/...` path:
+it's healthy, and its log path. It **ships with the repository** (see *The catalog and conditions ship
+with the repo* below) with 25 known components, each mapped to its systemd unit and its fixed
+`/Data/logs/...` path:
 
 | Catalog name | systemd unit |
 |---|---|
@@ -139,9 +140,9 @@ each mapped to its systemd unit and its fixed `/Data/logs/...` path:
 | conversion-rules-selector | `conversion-rule-selector.service` |
 | earning-rules-selector | `earning-rule-selector.service` |
 | rules-interpreter | `rule-interpreter.service` |
-| mq-wrapper, voucher-backend, loyalty-backend, portal-backend, voucher-management, balance-management, conversion-backend, goal-backend, prize-draw-backend, sales-backend, usage-backend | `<same name>.service` |
+| mq-wrapper, voucher-backend, loyalty-backend, portal-backend, voucher-management, balance-management, conversion-backend, goal-backend, prize-draw-backend, sales-backend, usage-backend, streak-backend | `<same name>.service` |
 | product-catalog | `product-catalog-backend.service` (the `admin/backend/product-catalog` one) |
-| product-catalog-service | `product-catalog.service` (the `system-modules/product-catalog` one — no log path yet) |
+| product-catalog-service | `product-catalog.service` (the `system-modules/product-catalog` one; no success pattern, so "unit is active" counts as healthy) |
 | balance-notification | `balance-util.service` |
 
 For a systemd entry the **Detect value is the unit name** — or several alternative names separated
@@ -157,9 +158,40 @@ needed or an existing path/pattern needs to change:
   software**, give it its unit name (e.g. `new-thing.service`) and, since the
   fixed log convention is `/Data/logs/<component>/<file>.log`, set its **Log
   path** the same way. Everything about a catalog entry is editable at any time.
-- **Upgrading an existing install:** on boot, catalog rows that are still exactly as
-  originally seeded (process-fragment detection, captured restart, no commands) are
-  switched to their systemd unit once. Any row you've edited yourself is left alone.
+
+#### The catalog and conditions ship with the repo
+
+The catalog **and the conditions** (next section) that you set up are stored in one file in the
+repository: [`server/defaults/defaults.json`](server/defaults/defaults.json). Anyone who pulls the repo
+gets exactly that catalog and those conditions — a new install starts with them already in place, nothing
+to enter by hand. On every start Healthcheck loads the file and **merges** it into the local database, so
+an upgrade never wipes what a customer changed:
+
+- An entry or condition that isn't in the database yet is **added**.
+- One that is there is left alone — except that a field **you changed in the file** is updated, as long as
+  the customer never edited that field themselves (it still holds what was shipped before). A customer's
+  own edit always wins over a newer shipped value.
+- One the customer **deleted stays deleted**. Entries the customer created themselves are never touched.
+- A shipped condition that would contradict one the customer made (a loop) is skipped, with a line in the
+  start-up log.
+- The start-up log says what was added or updated (`Shipped catalog/conditions applied: …`).
+
+**To publish a change** — you tune the catalog or conditions in the UI on your own installation, then:
+
+```bash
+npm run build                # once, so the export tool is built
+npm run defaults:export      # writes your catalog + conditions to server/defaults/defaults.json
+git add server/defaults/defaults.json
+git commit -m "Update shipped catalog/conditions"
+git push
+```
+
+Customers then `git pull`, rebuild and restart (see DEPLOYMENT.md) and receive it through the merge above.
+`npm run defaults:export` reads the database in `server/data` (or `HEALTHCHECK_DATA_DIR`) and shows what it
+wrote. Don't put secrets in start/stop commands: they would be exported too.
+
+**To put an installation back to the shipped state** (undo local edits to shipped entries, bring back
+deleted ones; anything the customer added is kept): `npm run defaults:reset`, then restart the app.
 
 ### How "healthy" is decided
 
@@ -174,8 +206,8 @@ on to the next one:
   (the last line of its start-up). These are educated defaults — if a
   component's log doesn't print its line (e.g. a jar's log level hides it) the start
   will time out; fix it by editing that component's **Success pattern** (or clearing it,
-  in which case "unit is active" counts as healthy). A catalog row still on the old generic
-  pattern for mq-wrapper is switched automatically on the next start; one you edited is left alone.
+  in which case "unit is active" counts as healthy). Fix such a pattern once in the catalog and publish it
+  with `npm run defaults:export` (see above).
 - **Running, but no success line?** If systemd reports the unit as running for more than
   `START_HINT_AFTER_S` seconds (30) and the success line still hasn't appeared, the step's live log
   says so and a **Mark as started** button appears on that line (with an (i) explaining it). Click it if
@@ -187,8 +219,9 @@ on to the next one:
   (and is retried — see below). If the service just keeps running, Healthcheck keeps waiting for the
   success line, so a healthy start that happens to log an ERROR still passes. The default is
   level-based: `\b(ERROR|FATAL|SEVERE)\b|APPLICATION FAILED TO START` (a log line *at* ERROR/FATAL
-  level, not the word "Exception" anywhere). Existing catalog rows still on the old default are switched
-  automatically; one you edited yourself is left alone. The failure message shows the exact line.
+  level, not the word "Exception" anywhere). The failure message shows the exact line. (An early version
+  saved `\b` as a backspace character in the database, which silently stopped ERROR lines from matching;
+  that is repaired automatically on start and before an export.)
 - systemd reporting the unit as `failed`, or the **health timeout** (300 s for the WSO2/
   WildFly/Keycloak tier, 180 s for jars) passing → the step fails. A timeout is **not** retried (a slow
   start won't be quicker the second time).
@@ -232,14 +265,15 @@ How the orders are worked out:
   override that wherever they apply. So if you never define a stop rule, stopping is simply start in
   reverse — a stop rule only exists to make stopping differ from that.
 - Start rules and stop rules are checked separately, so a stop rule never conflicts with a start rule.
-- Pre-loaded start rules (the ones you gave): Keycloak → WSO2 API Manager, Artemis → WildFly (JBoss),
-  and `conversion-rules-selector` → `earning-rules-selector` → `rules-interpreter`. There are no
-  stop rules to begin with.
+- Shipped rules (in `server/defaults/defaults.json`): *start before* — Keycloak → WSO2 API Manager,
+  Artemis → WildFly (JBoss), and `conversion-rules-selector` → `earning-rules-selector` →
+  `rules-interpreter`; *stop before* — WildFly (JBoss) → Artemis, WSO2 API Manager → WildFly (JBoss).
 - Built-in: services come before jars, unless a condition says otherwise.
 - Each condition has an **Active** switch (turn a rule off without deleting it), a note, and Delete.
   A rule that would create a loop among conditions of the same type (A before B before … before A) is
   refused.
-- The seeded rules are inserted once — if you delete one, it stays deleted.
+- Shipped rules are merged in on every start (see *The catalog and conditions ship with the repo*): a rule you
+  delete stays deleted until you run `npm run defaults:reset`.
 - Restart All restarts each component (stop, then start) in the start order.
 - **Only components a "Start before" condition mentions are started one after another.** Everything
   else (typically the jars, Nginx, Filebeat) is started **at the same time** as each other, up to
@@ -382,6 +416,7 @@ lines, colours errors/warnings, and has a **filter** box (matches highlighted), 
 ```
 shared/   Types + zod validation schemas shared by server and web
 server/   Express API, SQLite (node:sqlite), SSH connection pool, orchestrator
+          defaults/defaults.json = the shipped software catalog + conditions
 web/      React + Vite UI
 ```
 

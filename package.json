@@ -12,7 +12,9 @@
     "dev:server": "npm run dev --workspace server",
     "dev:web": "npm run dev --workspace web",
     "build": "npm run build --workspace shared && npm run build --workspace server && npm run build --workspace web",
-    "start": "node server/dist/index.js"
+    "start": "node server/dist/index.js",
+    "defaults:export": "node server/dist/tools/defaults.js export",
+    "defaults:reset": "node server/dist/tools/defaults.js reset"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",

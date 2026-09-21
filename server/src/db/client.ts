@@ -1,10 +1,13 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+// Default: server/data inside the project, wherever the app is started from (the folder is in .gitignore).
+const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.HEALTHCHECK_DATA_DIR
   ? path.resolve(process.env.HEALTHCHECK_DATA_DIR)
-  : path.resolve(process.cwd(), 'data');
+  : path.resolve(here, '../../data');
 fs.mkdirSync(dataDir, { recursive: true });
 
 export const sqlite = new DatabaseSync(path.join(dataDir, 'healthcheck.sqlite'));

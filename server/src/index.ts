@@ -3,8 +3,8 @@ import { sqlite } from './db/client.js';
 import { normalizeServerGroups } from './db/serverGroups.js';
 import { env } from './env.js';
 import { startHeartbeatScheduler } from './heartbeat/scheduler.js';
-import { seedDefaultConditions, resequenceAll } from './orchestrator/ordering.js';
-import { seedSoftwareCatalog, backfillDefaultRanks, applySystemdDefaults, applyUnitAliases, applyErrorPatternDefault, applySuccessPatternFixes, applyKnownLogPaths } from './db/seed.js';
+import { resequenceAll } from './orchestrator/ordering.js';
+import { applyBundledDefaults } from './db/defaults.js';
 
 // This process holds many long-lived SSH connections to remote hosts whose
 // network conditions we don't control. A dropped connection or unexpected
@@ -16,16 +16,25 @@ process.on('unhandledRejection', (err) => {
   console.error('Unhandled rejection (ignored to keep the server running):', err);
 });
 
-seedSoftwareCatalog();
-backfillDefaultRanks();
-applySystemdDefaults();
-applyUnitAliases();
-applyErrorPatternDefault();
-applySuccessPatternFixes();
-applyKnownLogPaths();
+// The software catalog and conditions that ship with Healthcheck (server/defaults/defaults.json): whatever
+// is missing here is added, and fields the vendor changed are updated unless this installation edited them.
+try {
+  const loaded = applyBundledDefaults();
+  const lines = [
+    ...loaded.updatedSoftware.map((n) => `catalog: updated ${n}`),
+    ...loaded.updatedConditions.map((n) => `condition updated - ${n}`),
+    ...loaded.skipped.map((n) => `skipped: ${n}`),
+  ];
+  // a fresh install adds everything at once: say how many instead of listing them all
+  const list = (label: string, names: string[]) =>
+    names.length > 4 ? [`${label}: added ${names.length}`] : names.map((n) => `${label}: added ${n}`);
+  const news = [...list('catalog', loaded.addedSoftware), ...list('conditions', loaded.addedConditions), ...lines];
+  if (news.length > 0) console.log(`Shipped catalog/conditions applied:\n  ${news.join('\n  ')}`);
+} catch (err) {
+  console.error('Could not apply the shipped catalog and conditions (continuing with what is in the database):', err);
+}
 // Order comes from conditions (see Conditions page); make sure every group reflects them.
 normalizeServerGroups(); // one server = one (hidden) group
-seedDefaultConditions();
 resequenceAll();
 
 // A job that was running when the app last stopped can never finish (its worker died with it), and
