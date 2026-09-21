@@ -1,4 +1,13 @@
-import 'dotenv/config';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import dotenv from 'dotenv';
+
+// Settings come from real environment variables, or from a .env file in the project root (or in server/).
+// Found relative to this file rather than the current folder, so it works the same however the app is
+// started (npm start, a Windows service ...). Real environment variables always win over the file.
+const here = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(here, '../../.env') });
+dotenv.config({ path: path.resolve(here, '../.env') });
 
 export const env = {
   port: Number(process.env.PORT ?? 4000),

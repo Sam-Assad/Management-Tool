@@ -6,6 +6,8 @@ start/restart/stop everything in the right order — gated on each step actually
 becoming healthy before the next one starts. You manage **servers**: each one is checked and
 controlled on its own.
 
+> **Installing on another machine?** See [DEPLOYMENT.md](DEPLOYMENT.md).
+
 > This file is kept up to date as the tool changes. If you make or ask for a
 > change that affects setup, configuration, or day-to-day usage, update this
 > file in the same pass.
@@ -66,8 +68,8 @@ npm start                    # serves the built UI + API from a single Node proc
 
 ### Environment variables (optional)
 
-Set these as real environment variables, or in a `server/.env` file (see
-`.env.example` at the repo root).
+Set these as real environment variables, or in a `.env` file in the project root (a `server/.env` also
+works; see `.env.example`). Real environment variables win over the file.
 
 | Variable | Default | Purpose |
 |---|---|---|

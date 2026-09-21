@@ -1,0 +1,261 @@
+# Deploying Healthcheck on another machine
+
+This guide installs Healthcheck on a **Windows machine** (the "Healthcheck host") that can reach your
+**Linux servers** over SSH. It takes about 15 minutes. For what the tool does and how to use it, see
+[README.md](README.md).
+
+```
+  Healthcheck host (Windows)                     Linux servers (one or many)
+  ┌──────────────────────────┐   SSH (port 22   ┌───────────────────────────┐
+  │ Node.js + Healthcheck    │ ───────────────► │ systemd units + a service │
+  │ browser → :4000          │  or your port)   │ account with sudo systemctl│
+  └──────────────────────────┘                  └───────────────────────────┘
+```
+
+Healthcheck installs nothing on the Linux servers. It logs in as a service account and runs
+`systemctl` — that's all.
+
+---
+
+## 1. Before you start — checklist
+
+**On the Healthcheck host (Windows)**
+
+- [ ] **Node.js 22.13 or newer** (the current LTS is fine). Check with `node -v`; download from
+      <https://nodejs.org>.
+- [ ] Network access from this machine to every Linux server on its SSH port.
+- [ ] A free port for the web page (default `4000`).
+- [ ] Either `git` + internet/npm access (route A below), or the release zip (route B).
+
+**On every Linux server** (the full explanation is in README section 1)
+
+- [ ] Every component runs as a **systemd service**.
+- [ ] A **service account** exists, and you know its password (used once, never stored).
+- [ ] That account may run `systemctl` through sudo **without a password** — in
+      `/etc/sudoers.d/healthcheck` (edit with `visudo -f`):
+      ```
+      svc_user ALL=(root) NOPASSWD: /usr/bin/systemctl
+      ```
+      Check it while logged in as that user; this must **not** ask for a password:
+      ```
+      sudo -n systemctl status sshd
+      ```
+      (Use the path `which systemctl` prints. If sudo says "you must have a tty", also add
+      `Defaults:svc_user !requiretty`.)
+
+---
+
+## 2. Get the application onto the machine
+
+Pick **one** route. Both were tested from a clean folder.
+
+### Route A — from the git repository (needs internet or an npm mirror)
+
+```powershell
+git clone https://github.com/Sam-Assad/Management-Tool.git C:\Healthcheck
+cd C:\Healthcheck
+npm ci
+npm run build
+```
+
+To install a specific release instead of the latest, add `--branch v1.0.0` to the `git clone`.
+
+### Route B — from a release zip (no git; only the runtime packages are downloaded)
+
+**Build the zip once, on the development machine:**
+
+```powershell
+cd C:\Users\sam\Desktop\Healthcheck
+npm run build
+
+$out = "$env:TEMP\healthcheck-release"
+Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory $out, "$out\shared", "$out\server", "$out\web" | Out-Null
+Copy-Item package.json, package-lock.json, tsconfig.base.json, README.md, DEPLOYMENT.md, .env.example $out
+Copy-Item shared\package.json "$out\shared\";  Copy-Item shared\dist "$out\shared\dist" -Recurse
+Copy-Item server\package.json "$out\server\";  Copy-Item server\dist "$out\server\dist" -Recurse
+Copy-Item web\package.json    "$out\web\";     Copy-Item web\dist    "$out\web\dist"    -Recurse
+Compress-Archive "$out\*" healthcheck-1.0.0.zip -Force
+```
+
+The zip is under 1 MB. **Never** add `server\data`, `.env` or `Services\` to it — they hold your keys,
+your servers and passwords.
+
+**On the Healthcheck host:**
+
+```powershell
+Expand-Archive healthcheck-1.0.0.zip C:\Healthcheck
+cd C:\Healthcheck
+npm ci --omit=dev
+```
+
+`npm ci --omit=dev` downloads about 28 MB of runtime packages. If the host has no internet access, run
+that command on a staging Windows machine with the same Node version, copy the whole folder across, and
+check it starts (step 4).
+
+> You will see `npm warn allow-scripts …` lines about `esbuild` / `ssh2`. They are harmless: the build
+> still works, and SSH uses its built-in JavaScript crypto.
+
+---
+
+## 3. Configure
+
+Create a file named `.env` **in the project root** (`C:\Healthcheck\.env`; a `server\.env` also works).
+Start from the template:
+
+```powershell
+copy .env.example .env
+notepad .env
+```
+
+The settings that matter for a new install:
+
+```ini
+PORT=4000
+HOST=127.0.0.1
+HEALTHCHECK_DATA_DIR=D:\HealthcheckData
+```
+
+| Setting | What to put |
+|---|---|
+| `PORT` | The port for the web page. |
+| `HOST` | `127.0.0.1` = only this machine can open the page (recommended). See **Security** below before changing it. |
+| `HEALTHCHECK_DATA_DIR` | A folder **outside** the application folder, so upgrades never touch it. It is created on first start. |
+
+The other settings (retry counts, parallel starts, heartbeat interval …) have sensible defaults; the full
+list is in README section 2. Real environment variables always win over the `.env` file.
+
+---
+
+## 4. Start it and check
+
+```powershell
+cd C:\Healthcheck
+npm start
+```
+
+You should see:
+
+```
+Healthcheck server listening on http://127.0.0.1:4000
+```
+
+Open **http://localhost:4000** in a browser on that machine. You should see the *Your servers* page
+with no servers. Stop it with `Ctrl+C` once you have seen that — the next step makes it permanent.
+
+---
+
+## 5. Keep it running (Windows service)
+
+Use [NSSM](https://nssm.cc) (a small free service wrapper). Run PowerShell **as Administrator**:
+
+```powershell
+nssm install Healthcheck "C:\Program Files\nodejs\node.exe" "server\dist\index.js"
+nssm set Healthcheck AppDirectory C:\Healthcheck
+nssm set Healthcheck Start SERVICE_AUTO_START
+nssm set Healthcheck AppStdout C:\Healthcheck\healthcheck.log
+nssm set Healthcheck AppStderr C:\Healthcheck\healthcheck.log
+nssm start Healthcheck
+```
+
+The service reads the same `.env`. Restart the service after changing it:
+`nssm restart Healthcheck`. (No NSSM? A Task Scheduler task "At startup" running
+`node server\dist\index.js` in `C:\Healthcheck` does the same job.)
+
+---
+
+## 6. Add your first server
+
+1. Open the page → **+ Add server**.
+2. Enter a name, the host/IP, the SSH port, the service account's user name and its **password**.
+3. Healthcheck creates its own SSH key, installs it on that server using the password, and never keeps
+   the password. It then finds which of the catalog's components are installed there and lists them.
+4. Open the server and click **Check status**. Everything installed should appear with its state.
+5. Before trusting a **Start All** in production, try a single **Start / Stop** on a non-critical
+   component first.
+
+Each market's log paths and success patterns can differ. Check them once in **Software Catalog**.
+
+---
+
+## 7. Security
+
+- **There is no login.** The tool can start and stop production software, so by default it only listens
+  on `127.0.0.1`. To let other PCs open it, set `HOST=0.0.0.0` **and** limit who can reach the port:
+  ```powershell
+  New-NetFirewallRule -DisplayName "Healthcheck" -Direction Inbound -Protocol TCP -LocalPort 4000 `
+    -Action Allow -RemoteAddress 10.20.30.0/24
+  ```
+  If it will be used by several people, ask for login to be enabled first.
+- The data folder contains the **private SSH key** that is installed on your servers. Protect it like a
+  password: only the account that runs the service (and administrators) should be able to read it.
+- Never copy one customer's data folder to another customer's machine.
+
+---
+
+## 8. Data, backup, moving to another machine
+
+Everything Healthcheck remembers is in `HEALTHCHECK_DATA_DIR`:
+
+| File | What it is |
+|---|---|
+| `healthcheck.sqlite` (+ `-wal`, `-shm`) | Servers, software catalog, conditions, job history, statuses. |
+| `healthcheck_id_rsa` / `.pub` | The SSH key installed on your servers (created when you add the first one). |
+| `master.key` | Encryption key for stored secrets. |
+
+- **Back up:** stop the service, copy the whole folder, start the service.
+- **Move to a new machine:** install as above, stop the service, copy the data folder over, point
+  `HEALTHCHECK_DATA_DIR` at it, start. The servers keep working with no re-adding, as long as the new
+  machine can reach them.
+- **Lost the data folder:** install fresh and add the servers again. The old key stays in each server's
+  `~/.ssh/authorized_keys` until you remove it (see *Uninstall*).
+
+---
+
+## 9. Upgrade
+
+```powershell
+nssm stop Healthcheck
+cd C:\Healthcheck
+# Route A:  git pull  (or: git fetch --tags; git checkout v1.1.0)   then:  npm ci ; npm run build
+# Route B:  unpack the new zip over the folder                       then:  npm ci --omit=dev
+nssm start Healthcheck
+```
+
+The database updates itself on start, and the data folder is untouched.
+
+---
+
+## 10. Uninstall
+
+```powershell
+nssm stop Healthcheck
+nssm remove Healthcheck confirm
+Remove-Item C:\Healthcheck -Recurse         # the application
+# keep or delete the data folder (HEALTHCHECK_DATA_DIR) as you prefer
+```
+
+On each Linux server, remove Healthcheck's key so it can no longer log in:
+
+```
+sed -i '/healthcheck-generated-key/d' ~/.ssh/authorized_keys
+```
+
+Nothing else was installed there.
+
+---
+
+## 11. Troubleshooting
+
+| What you see | Likely cause and fix |
+|---|---|
+| `No such built-in module: node:sqlite` when starting | Node.js is too old. Install 22.13 or newer. |
+| `EADDRINUSE` / "address already in use" on start | Another program uses that port on the Windows machine. Change `PORT` in `.env`. |
+| Page shows *Cannot GET /* or is blank | The web part isn't built (`web\dist` is missing). Run `npm run build` (route A) or re-unpack the zip (route B). |
+| My `.env` changes have no effect | The service wasn't restarted, or the file isn't in the project root (`C:\Healthcheck\.env`). |
+| Adding a server says *unreachable* | Wrong host or port, or a firewall between the two machines. Test with `Test-NetConnection <host> -Port 22`. |
+| Adding a server says *authentication failed* | Wrong user name or password for the service account. |
+| Start/Stop fails mentioning sudo or a password | The `NOPASSWD` rule is missing for `systemctl` (section 1). |
+| Every component shows *not installed* | Its systemd unit doesn't exist under the name in the Software Catalog. Check `systemctl list-unit-files`. |
+| A start times out although the service is up | The catalog's *Success pattern* isn't what that log prints. Fix it in Software Catalog, or use **Mark as started** on the running line. |
+| `npm ci` fails behind a company proxy | `npm config set proxy http://proxy:port` and `npm config set https-proxy http://proxy:port`. |
