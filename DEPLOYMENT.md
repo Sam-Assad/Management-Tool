@@ -51,8 +51,8 @@ Pick **one** route. Both were tested from a clean folder.
 
 ### Route A — from the git repository (needs internet or an npm mirror)
 
-Customers install from the **`release-1`** branch — that is the tested release, with the shipped catalog
-and conditions and the current UI:
+Customers install from the **`release-1`** branch, the repository's default branch: the tested release,
+with the shipped catalog and conditions, the current UI, and none of your own servers:
 
 ```powershell
 git clone --branch release-1 https://github.com/Sam-Assad/Management-Tool.git C:\Healthcheck
@@ -61,8 +61,8 @@ npm ci
 npm run build
 ```
 
-(`--branch release-1` matters: the repository's default branch may be older. If you make `release-1` the
-default branch on GitHub, a plain `git clone` gets it too.)
+(`--branch release-1` is optional, since it is the default branch, but it keeps the command correct even if
+the default ever changes.)
 
 ### Route B — from a release zip (no git; only the runtime packages are downloaded)
 
@@ -276,7 +276,8 @@ Nothing else was installed there.
 
 ## 12. For the maintainer — publishing changes
 
-Customers install from the **`release-1`** branch, so that is where finished changes go:
+Customers install from the **`release-1`** branch (the default branch on GitHub), so that is where
+finished changes go:
 
 ```powershell
 git switch release-1
