@@ -18,6 +18,25 @@ export function useServerList() {
   return useQuery({ queryKey: ['servers'], queryFn: () => api.get<ServerSummary[]>('/servers'), refetchInterval: 20000 });
 }
 
+export interface RecentJob {
+  id: number;
+  group_id: number | null;
+  kind: string;
+  status: string;
+  awaiting: string | null;
+  error_message: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export function useRecentJobs(limit = 8) {
+  return useQuery({
+    queryKey: ['jobs', 'recent', limit],
+    queryFn: () => api.get<RecentJob[]>(`/jobs?limit=${limit}`),
+    refetchInterval: 10000,
+  });
+}
+
 export function useServer(serverId: number) {
   return useQuery({ queryKey: ['servers', serverId], queryFn: () => api.get<ServerSummary>(`/servers/${serverId}`) });
 }

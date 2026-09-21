@@ -48,7 +48,7 @@ interface JobProgressPanelProps {
   onClear?: () => void;
 }
 
-const KIND_LABEL: Record<string, string> = {
+export const KIND_LABEL: Record<string, string> = {
   start_all: 'Start All',
   start_one: 'Start',
   restart_all: 'Restart All',

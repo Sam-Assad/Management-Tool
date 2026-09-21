@@ -96,8 +96,8 @@ export default function ConditionsPage() {
         Start &amp; stop <span className="gradient-text">conditions</span>
       </h1>
       <p className="muted">
-        Conditions are the rules that decide the order every group starts and stops in. They replace manual
-        reordering: add or change a rule here and every group's order updates to match. Start and stop are
+        Conditions are the rules that decide the order every server starts and stops in. They replace manual
+        reordering: add or change a rule here and every server's order updates to match. Start and stop are
         separate: <b>Start before</b> rules shape the start order, <b>Stop before</b> rules shape the stop order.
       </p>
 
@@ -110,12 +110,12 @@ export default function ConditionsPage() {
               <b>Built-in:</b> services start before jars, unless a condition below says otherwise.
             </li>
             <li>
-              <b>Your conditions:</b> "A must start before B" is honoured in every group that has both. Anything
+              <b>Your conditions:</b> "A must start before B" is honoured on every server that has both. Anything
               they don't constrain is ordered services first, then by name.
             </li>
             <li>
               <b>Stopping</b> runs in the reverse of the start order, unless a <b>Stop before</b> condition says
-              otherwise — "A must stop before B" is honoured in every group that has both, and wins over the
+              otherwise — "A must stop before B" is honoured on every server that has both, and wins over the
               reversal. Start rules and stop rules are checked separately, so they never conflict with each other.
             </li>
           </ul>

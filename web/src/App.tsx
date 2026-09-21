@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { Routes, Route, Link, NavLink, Navigate } from 'react-router-dom';
+import { Routes, Route, Link, NavLink, Navigate, useNavigate } from 'react-router-dom';
 import ServersDashboard from './pages/ServersDashboard';
 import ServerDetail from './pages/ServerDetail';
 import GroupRedirect from './pages/GroupRedirect';
 import SoftwareCatalogPage from './pages/SoftwareCatalogPage';
 import ConditionsPage from './pages/ConditionsPage';
 import JobDetailPage from './pages/JobDetailPage';
-import { IconServer, IconCatalog, IconConditions, IconChevronLeft, IconChevronRight } from './components/Icons';
+import TopBar from './components/TopBar';
+import { IconServer, IconCatalog, IconConditions, IconChevronLeft, IconChevronRight, IconPlus } from './components/Icons';
 
 function loadCollapsed(): boolean {
   try {
@@ -20,6 +21,7 @@ const navClass = ({ isActive }: { isActive: boolean }) => `nav-item${isActive ? 
 
 export default function App() {
   const [collapsed, setCollapsed] = useState(loadCollapsed);
+  const navigate = useNavigate();
 
   function toggleCollapsed() {
     const next = !collapsed;
@@ -73,11 +75,15 @@ export default function App() {
         </nav>
 
         <div className="sb-foot">
-          <span className="sb-foot-dot" />
-          {!collapsed && <span>Vodafone Loyalty Platform</span>}
+          {!collapsed && <p>Manage another server from anywhere in the tool.</p>}
+          <button className="sb-add" onClick={() => navigate('/?add=1')} title="Add server" aria-label="Add server">
+            <IconPlus size={15} />
+            {!collapsed && <span>Add server</span>}
+          </button>
         </div>
       </aside>
       <main className="page">
+        <TopBar />
         <Routes>
           <Route path="/" element={<ServersDashboard />} />
           <Route path="/servers/:serverId" element={<ServerDetail />} />

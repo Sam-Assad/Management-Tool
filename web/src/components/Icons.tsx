@@ -65,3 +65,16 @@ export const IconChevronRight = () => (
     <path d="m9.5 6 6 6-6 6" />
   </Icon>
 );
+
+export const IconSearch = ({ size }: { size?: number }) => (
+  <Icon size={size}>
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="m20 20-3.6-3.6" />
+  </Icon>
+);
+
+export const IconPlus = ({ size }: { size?: number }) => (
+  <Icon size={size}>
+    <path d="M12 5v14M5 12h14" />
+  </Icon>
+);

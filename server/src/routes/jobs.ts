@@ -48,9 +48,12 @@ jobsRouter.get(
   '/jobs',
   asyncHandler(async (req, res) => {
     const groupId = req.query.groupId ? Number(req.query.groupId) : undefined;
+    // ?limit=N returns just the latest N (the overview page's activity list)
+    const limit = Math.min(Math.max(Number(req.query.limit) || 0, 0), 500);
+    const tail = limit > 0 ? ` LIMIT ${limit}` : '';
     const rows = groupId
-      ? sqlite.prepare('SELECT * FROM job_runs WHERE group_id = ? ORDER BY id DESC').all(groupId)
-      : sqlite.prepare('SELECT * FROM job_runs ORDER BY id DESC').all();
+      ? sqlite.prepare(`SELECT * FROM job_runs WHERE group_id = ? ORDER BY id DESC${tail}`).all(groupId)
+      : sqlite.prepare(`SELECT * FROM job_runs ORDER BY id DESC${tail}`).all();
     res.json(rows);
   })
 );

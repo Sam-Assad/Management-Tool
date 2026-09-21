@@ -228,7 +228,7 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
 
       {suggestions && suggestions.length > 0 && (
         <section>
-          <div className="card" style={{ borderColor: 'rgba(230, 0, 0, 0.3)' }}>
+          <div className="card" style={{ borderColor: 'rgba(211, 47, 47, 0.3)' }}>
             <p style={{ margin: '0 0 10px' }}>
               <b>Installed on this server but not in its list yet:</b>
             </p>
