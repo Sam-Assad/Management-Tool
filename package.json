@@ -1,0 +1,21 @@
+{
+  "name": "healthcheck",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "npm run build --workspace shared && concurrently -n server,web -c blue,green npm:dev:server npm:dev:web",
+    "dev:server": "npm run dev --workspace server",
+    "dev:web": "npm run dev --workspace web",
+    "build": "npm run build --workspace shared && npm run build --workspace server && npm run build --workspace web",
+    "start": "node server/dist/index.js"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "typescript": "^5.5.4"
+  }
+}
