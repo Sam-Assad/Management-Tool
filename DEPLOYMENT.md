@@ -51,14 +51,18 @@ Pick **one** route. Both were tested from a clean folder.
 
 ### Route A — from the git repository (needs internet or an npm mirror)
 
+Customers install from the **`release-1`** branch — that is the tested release, with the shipped catalog
+and conditions and the current UI:
+
 ```powershell
-git clone https://github.com/Sam-Assad/Management-Tool.git C:\Healthcheck
+git clone --branch release-1 https://github.com/Sam-Assad/Management-Tool.git C:\Healthcheck
 cd C:\Healthcheck
 npm ci
 npm run build
 ```
 
-To install a specific release instead of the latest, add `--branch v1.0.0` to the `git clone`.
+(`--branch release-1` matters: the repository's default branch may be older. If you make `release-1` the
+default branch on GitHub, a plain `git clone` gets it too.)
 
 ### Route B — from a release zip (no git; only the runtime packages are downloaded)
 
@@ -76,7 +80,7 @@ Copy-Item shared\package.json "$out\shared\";  Copy-Item shared\dist "$out\share
 Copy-Item server\package.json "$out\server\";  Copy-Item server\dist "$out\server\dist" -Recurse
 Copy-Item server\defaults "$out\server\defaults" -Recurse      # the shipped catalog + conditions
 Copy-Item web\package.json    "$out\web\";     Copy-Item web\dist    "$out\web\dist"    -Recurse
-Compress-Archive "$out\*" healthcheck-1.0.0.zip -Force
+Compress-Archive "$out\*" healthcheck-release-1.zip -Force
 ```
 
 The zip is under 1 MB. It **must** contain `server\defaults` (your catalog and conditions). **Never** add `server\data`, `.env` or `Services\` to it — they hold your keys,
@@ -85,7 +89,7 @@ your servers and passwords.
 **On the Healthcheck host:**
 
 ```powershell
-Expand-Archive healthcheck-1.0.0.zip C:\Healthcheck
+Expand-Archive healthcheck-release-1.zip C:\Healthcheck
 cd C:\Healthcheck
 npm ci --omit=dev
 ```
@@ -121,7 +125,7 @@ HEALTHCHECK_DATA_DIR=D:\HealthcheckData
 |---|---|
 | `PORT` | The port for the web page. |
 | `HOST` | `127.0.0.1` = only this machine can open the page (recommended). See **Security** below before changing it. |
-| `HEALTHCHECK_DATA_DIR` | A folder **outside** the application folder, so upgrades never touch it. It is created on first start. |
+| `HEALTHCHECK_DATA_DIR` | A folder **outside** the application folder, so upgrades never touch it. It is created on first start. If you leave it out, the data goes to `server\data` inside the application folder (it is excluded from git, but a re-install of the folder would delete it). |
 
 The other settings (retry counts, parallel starts, heartbeat interval …) have sensible defaults; the full
 list is in README section 2. Real environment variables always win over the `.env` file.
@@ -221,7 +225,7 @@ Everything Healthcheck remembers is in `HEALTHCHECK_DATA_DIR`:
 ```powershell
 nssm stop Healthcheck
 cd C:\Healthcheck
-# Route A:  git pull  (or: git fetch --tags; git checkout v1.1.0)   then:  npm ci ; npm run build
+# Route A:  git fetch origin ; git checkout release-1 ; git pull   then:  npm ci ; npm run build
 # Route B:  unpack the new zip over the folder                       then:  npm ci --omit=dev
 nssm start Healthcheck
 ```
@@ -267,3 +271,27 @@ Nothing else was installed there.
 | Every component shows *not installed* | Its systemd unit doesn't exist under the name in the Software Catalog. Check `systemctl list-unit-files`. |
 | A start times out although the service is up | The catalog's *Success pattern* isn't what that log prints. Fix it in Software Catalog, or use **Mark as started** on the running line. |
 | `npm ci` fails behind a company proxy | `npm config set proxy http://proxy:port` and `npm config set https-proxy http://proxy:port`. |
+
+---
+
+## 12. For the maintainer — publishing changes
+
+Customers install from the **`release-1`** branch, so that is where finished changes go:
+
+```powershell
+git switch release-1
+# ... change and test ...
+git add -A
+git commit -m "What changed"
+git push
+```
+
+- **New catalog / conditions:** tune them in the UI on your own installation, then
+  `npm run build` and `npm run defaults:export`, commit `server/defaults/defaults.json` and push
+  (README, *The catalog and conditions ship with the repo*). Customers pick it up when they upgrade (section 9).
+- **Never commit** `server/data`, `.env` or `Services/` (they hold keys and passwords; all three are in
+  `.gitignore`). Check with `git status` before a commit.
+- **A new major version:** create `release-2` from `release-1`, and tell customers to use
+  `--branch release-2` from then on.
+- **Keep the release branch working:** before pushing, run `npm run build` once and start the app
+  (`npm start`) to be sure it comes up.
