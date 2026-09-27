@@ -321,13 +321,28 @@ function watchHealth(client: any, def: SoftwareDefinition, live?: (tail: string)
   );
   cleanups.push(() => clearTimeout(timer));
 
-  const crashed = (line: string): HealthResult => ({
-    healthy: false,
-    reason: 'crash',
-    excerpt:
-      `The service crashed or was restarted after this log line (it matched the Error pattern /${def.error_pattern}/):\n${line}\n\n` +
-      `Recent log:\n${recentLog()}`,
-  });
+  // Re-checked against the whole recent buffer, not just the one line that triggered this, because
+  // confirmCrash's SSH round-trip can settle before a follow-up log line (the actual "ORA-28001: the
+  // password has expired", printed right after a generic "ERROR ... Application run failed") arrives.
+  const crashed = (line: string): HealthResult => {
+    const recent = recentLog();
+    if (CREDENTIAL_EXPIRED_RE.test(recent)) {
+      return {
+        healthy: false,
+        reason: 'credential_expired',
+        excerpt:
+          `${def.name}'s password or credentials look expired - retrying will not help until this is fixed on the server:\n\n` +
+          `Recent log:\n${recent}`,
+      };
+    }
+    return {
+      healthy: false,
+      reason: 'crash',
+      excerpt:
+        `The service crashed or was restarted after this log line (it matched the Error pattern /${def.error_pattern}/):\n${line}\n\n` +
+        `Recent log:\n${recent}`,
+    };
+  };
 
   async function confirmCrash(line: string) {
     if (confirming) return;
@@ -396,11 +411,18 @@ function watchHealth(client: any, def: SoftwareDefinition, live?: (tail: string)
         if (isSystemd) {
           const state = await probeComponentUnit(client, def);
           if (state.active === 'failed') {
-            finish({
-              healthy: false,
-              reason: 'crash',
-              excerpt: `systemd reports ${state.unit} as failed.\n\nRecent log:\n${recentLog()}`,
-            });
+            const recent = recentLog();
+            finish(
+              CREDENTIAL_EXPIRED_RE.test(recent)
+                ? {
+                    healthy: false,
+                    reason: 'credential_expired',
+                    excerpt:
+                      `${def.name}'s password or credentials look expired - retrying will not help until this is fixed on the server:\n\n` +
+                      `Recent log:\n${recent}`,
+                  }
+                : { healthy: false, reason: 'crash', excerpt: `systemd reports ${state.unit} as failed.\n\nRecent log:\n${recent}` }
+            );
           } else if (!logMode && state.installed && state.active === 'active') {
             finish({ healthy: true, excerpt: '(no log pattern configured - unit is active)' });
           } else if (logMode) {
@@ -844,6 +866,9 @@ interface RunResult {
   // set when the operator chose "Roll back": what was stopped again, and what would not stop
   rolledBack: string[] | null;
   rollbackFailed: string[];
+  // components carried past automatically after the operator chose Continue for the same expired
+  // password/credential earlier in this run
+  autoContinued: string[];
 }
 
 type StepFn = (
@@ -915,6 +940,11 @@ async function runGroupSequence(
   const failed: string[] = [];
   const failedPairs: Array<{ serverId: number; softwareId: number }> = [];
   const blocked: string[] = [];
+  // Once the operator chooses "Continue" past one expired-password failure, every other component hit
+  // by the same expired credential in this run is carried past automatically too, instead of asking
+  // once per component - they'd all get the same two-choice question with the same answer anyway.
+  let autoContinuePastCredential = false;
+  const autoContinued: string[] = [];
   const remaining = new Set<string>();
   const ending = () => runEnding(jobId);
   let haltedAt = null as string | null;
@@ -993,23 +1023,31 @@ async function runGroupSequence(
 
     let ok = await stepFn(jobId, server, def, true, env.startAttempts);
     while (!ok) {
-      const holdsBack = transitiveDependents(def.id, dependents, inRun)
-        .map((id) => nameOf.get(id))
-        .filter((n): n is string => Boolean(n));
       const limited = credentialFailures.has(pendingKey(jobId, server.id, def.id));
-      const choice = await ask({
-        component: def.name,
-        server: server.name,
-        verb,
-        summary: limited
-          ? `${def.name}${servers.length > 1 ? ` on ${server.name}` : ''}'s password or credentials look expired - retrying was skipped, it would fail the same way.`
-          : `${def.name}${servers.length > 1 ? ` on ${server.name}` : ''} ${VERB_TEXT[verb].didNot}${verb !== 'stop' && env.startAttempts > 1 ? ` (after up to ${env.startAttempts} attempts)` : ''}.`,
-        detail: lastStepReason(jobId, server.id, def.id),
-        holdsBack,
-        rollback: rollbackNames(def),
-        portFix: describeFixFor(jobId, server.id, def.id),
-        limited,
-      });
+      let choice: Decision;
+      if (limited && autoContinuePastCredential) {
+        // Same expired credential as one already answered this run - don't ask again.
+        choice = 'skip';
+        autoContinued.push(label(server, def));
+      } else {
+        const holdsBack = transitiveDependents(def.id, dependents, inRun)
+          .map((id) => nameOf.get(id))
+          .filter((n): n is string => Boolean(n));
+        choice = await ask({
+          component: def.name,
+          server: server.name,
+          verb,
+          summary: limited
+            ? `${def.name}${servers.length > 1 ? ` on ${server.name}` : ''}'s password or credentials look expired - retrying was skipped, it would fail the same way.`
+            : `${def.name}${servers.length > 1 ? ` on ${server.name}` : ''} ${VERB_TEXT[verb].didNot}${verb !== 'stop' && env.startAttempts > 1 ? ` (after up to ${env.startAttempts} attempts)` : ''}.`,
+          detail: lastStepReason(jobId, server.id, def.id),
+          holdsBack,
+          rollback: rollbackNames(def),
+          portFix: describeFixFor(jobId, server.id, def.id),
+          limited,
+        });
+        if (limited && choice === 'skip') autoContinuePastCredential = true;
+      }
       if (choice === 'retry') {
         ok = await stepFn(jobId, server, def, true, env.startAttempts);
         continue;
@@ -1076,7 +1114,7 @@ async function runGroupSequence(
     rolledBack = result.done;
     rollbackFailed = result.failed;
   }
-  return { failed, blocked, haltedAt, remaining: [...remaining], rolledBack, rollbackFailed };
+  return { failed, blocked, haltedAt, remaining: [...remaining], rolledBack, rollbackFailed, autoContinued };
 }
 
 function finishSequenceJob(jobId: number, verb: Verb, result: RunResult) {
@@ -1087,6 +1125,10 @@ function finishSequenceJob(jobId: number, verb: Verb, result: RunResult) {
   const t = VERB_TEXT[verb];
   const failWord = verb === 'stop' ? 'did not stop' : verb === 'restart' ? 'did not restart healthy' : 'did not become healthy';
   let message = `${result.failed.join(', ')} ${failWord}.`;
+  if (result.autoContinued.length > 0) {
+    const was = result.autoContinued.length > 1 ? 'were' : 'was';
+    message += ` ${result.autoContinued.join(', ')} hit the same expired password/credential and ${was} continued past automatically.`;
+  }
   if (result.rolledBack) {
     message += ` Rolled back: stopped ${result.rolledBack.length > 0 ? result.rolledBack.join(', ') : 'nothing'}.`;
     if (result.rollbackFailed.length > 0) message += ` Could not stop: ${result.rollbackFailed.join(', ')}.`;

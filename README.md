@@ -256,9 +256,16 @@ is held back).
   the password has expired`, `password ... expired`, `expired ... password`, Active Directory's
   `data 773`) fails the step **immediately, on the first attempt** — none of the usual retries, since
   the same login will fail the same way every time until the password is changed on the server. The
-  question box then offers only **Continue without it** and **Roll back** — Retry and Stop the run are
-  hidden, since neither helps here. Continue skips it and carries on with the rest (holding back only
-  what depends on it through a condition); Roll back undoes what this run has started so far.
+  check looks at the whole recent log, not just the exact line that first looked like an error, since a
+  wrapping exception (a Spring "Application run failed" line, a WildFly JCA pool warning, ...) often logs
+  its own generic line before the real `ORA-28001`-style cause a moment later. The question box then
+  offers only **Continue without it** and **Roll back** — Retry and Stop the run are hidden, since
+  neither helps here. Continue skips it and carries on with the rest (holding back only what depends on
+  it through a condition); Roll back undoes what this run has started so far. **One shared password
+  behind several components** (a common Oracle account, for example) usually expires for all of them at
+  once: the first one still asks, but once you choose Continue, every other component that hits the
+  *same* expired-credential failure later in that run is carried past automatically, without asking
+  again — they'd get the identical question with the identical answer anyway.
 
 ### Start & stop order — Conditions
 
