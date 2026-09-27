@@ -206,7 +206,9 @@ on to the next one:
 
 - **Success pattern** (regex) seen in *new* lines of the component's log → healthy. The
   defaults are: Keycloak `Listening on:`, WSO2 API Manager `WSO2 Carbon started in`,
-  Artemis `Server is now live`, WildFly `WFLYSRV0025`, and Spring Boot's
+  Artemis `Server is now live`, WildFly `WFLYSRV0025|WFLYSRV0026` (it prints `0025` when everything
+  deployed cleanly and `0026` when it came up "with errors" - some deployment failed but the server
+  itself is running; either one counts as started), and Spring Boot's
   `Started <App> in N seconds` for every jar except **mq-wrapper**, which logs through its own
   log4j2 layout and never prints that line: its default is `configureConnectionManager, s=success`
   (the last line of its start-up). These are educated defaults — if a
@@ -249,6 +251,14 @@ is held back).
   processes the service user is allowed to stop — its own, or a systemd service (via the same NOPASSWD
   rule). A listener the SSH user can't see (another user's, without root) is reported as such, with the
   `sudo ss -ltnp` command to find it. Nothing is ever stopped without you pressing that button.
+
+- **Expired password / credential.** A line mentioning an expired password or credential (`ORA-28001:
+  the password has expired`, `password ... expired`, `expired ... password`, Active Directory's
+  `data 773`) fails the step **immediately, on the first attempt** — none of the usual retries, since
+  the same login will fail the same way every time until the password is changed on the server. The
+  question box then offers only **Continue without it** and **Roll back** — Retry and Stop the run are
+  hidden, since neither helps here. Continue skips it and carries on with the rest (holding back only
+  what depends on it through a condition); Roll back undoes what this run has started so far.
 
 ### Start & stop order — Conditions
 

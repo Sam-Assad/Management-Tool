@@ -26,6 +26,8 @@ interface Awaiting {
   rollback?: string[];
   // set when something else holds a port the component needs
   portFix?: { label: string; detail: string };
+  // set when this was an expired password/credential: retrying can't help, so only Continue / Roll back show
+  limited?: boolean;
   expires_at: string;
 }
 
@@ -237,6 +239,12 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear }: JobProgre
         <div className="jp-decision">
           <div className="jp-decision-title">{job.awaiting.summary}</div>
           {job.awaiting.detail && <pre className="step-log">{job.awaiting.detail}</pre>}
+          {job.awaiting.limited && (
+            <div className="jp-decision-hint jp-decision-urgent">
+              This looks like an expired password or credential, so retrying was skipped - it would only fail the same way
+              again. Fix it on the server, then Continue past it or Roll back.
+            </div>
+          )}
           <div className="jp-decision-hint">
             The run is paused.{' '}
             {job.awaiting.holdsBack.length > 0
@@ -252,32 +260,38 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear }: JobProgre
                 <InfoTip>{job.awaiting.portFix.detail}</InfoTip>
               </span>
             )}
+            {!job.awaiting.limited && (
+              <span className="with-info">
+                <button className={job.awaiting.portFix ? '' : 'primary'} disabled={deciding} onClick={() => decide('retry')}>
+                  Retry
+                </button>
+                <InfoTip>Tries {job.awaiting.component} again - for example after you have fixed the cause.</InfoTip>
+              </span>
+            )}
             <span className="with-info">
-              <button className={job.awaiting.portFix ? '' : 'primary'} disabled={deciding} onClick={() => decide('retry')}>
-                Retry
-              </button>
-              <InfoTip>Tries {job.awaiting.component} again - for example after you have fixed the cause.</InfoTip>
-            </span>
-            <span className="with-info">
-              <button disabled={deciding} onClick={() => decide('skip')}>
-                {job.awaiting.verb === 'stop'
-                  ? `Leave ${job.awaiting.component} running and continue`
-                  : `Skip ${job.awaiting.component} and continue`}
+              <button className={job.awaiting.limited ? 'primary' : ''} disabled={deciding} onClick={() => decide('skip')}>
+                {job.awaiting.limited
+                  ? `Continue without ${job.awaiting.component}`
+                  : job.awaiting.verb === 'stop'
+                    ? `Leave ${job.awaiting.component} running and continue`
+                    : `Skip ${job.awaiting.component} and continue`}
               </button>
               <InfoTip>
                 Gives up on {job.awaiting.component} and carries on with the rest. Only components that depend on it through
                 a condition are held back.
               </InfoTip>
             </span>
-            <span className="with-info">
-              <button className="danger" disabled={deciding} onClick={() => decide('halt')}>
-                Stop the run here
-              </button>
-              <InfoTip>
-                Ends the run now and starts nothing further, so you can look into the problem. Whatever is already running
-                is left running. If nobody answers within 30 minutes, the run stops by itself.
-              </InfoTip>
-            </span>
+            {!job.awaiting.limited && (
+              <span className="with-info">
+                <button className="danger" disabled={deciding} onClick={() => decide('halt')}>
+                  Stop the run here
+                </button>
+                <InfoTip>
+                  Ends the run now and starts nothing further, so you can look into the problem. Whatever is already running
+                  is left running. If nobody answers within 30 minutes, the run stops by itself.
+                </InfoTip>
+              </span>
+            )}
             {job.awaiting.rollback && (
               <span className="with-info">
                 <button className="danger" disabled={deciding} onClick={() => decide('rollback')}>

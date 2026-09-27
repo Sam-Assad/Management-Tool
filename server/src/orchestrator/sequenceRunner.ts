@@ -57,6 +57,9 @@ function finishJob(jobId: number, status: 'succeeded' | 'failed', errorMessage?:
   portConflicts.forEach((_v, key) => {
     if (key.startsWith(`${jobId}:`)) portConflicts.delete(key);
   });
+  credentialFailures.forEach((key) => {
+    if (key.startsWith(`${jobId}:`)) credentialFailures.delete(key);
+  });
   pendingSteps.forEach((_id, key) => {
     if (key.startsWith(`${jobId}:`)) pendingSteps.delete(key);
   });
@@ -111,6 +114,10 @@ function forgetStarted(jobId: number, serverId: number, softwareId: number) {
 
 // A component whose port is taken by something else: which ports, and who holds them (for the question).
 const portConflicts = new Map<string, { ports: number[]; holders: PortHolder[] }>();
+
+// A component that failed because of an expired password/credential: retrying is pointless, so the
+// question offers only Continue / Roll back (see runGroupSequence's ask() call).
+const credentialFailures = new Set<string>();
 
 // Live control of a running job. Ending a run (stop / roll back) has to reach starts that are already
 // under way: cancel every health wait at once, and make anything about to start check first.
@@ -215,11 +222,17 @@ function isGroupBusy(groupId: number): boolean {
   return row.count > 0;
 }
 
+// A password/credential that has expired will fail exactly the same way every attempt (DB login,
+// LDAP bind, a keystore password, ...) - retrying it is pointless and just wastes the wait. Covers the
+// common phrasings plus Oracle's ORA-28001 and Active Directory's "data 773" bind response.
+export const CREDENTIAL_EXPIRED_RE = /\bpassword\b[^\n]{0,25}\bexpired\b|\bexpired\b[^\n]{0,25}\bpassword\b|\bORA-28001\b|data 773\b/i;
+
 interface HealthResult {
   healthy: boolean;
   excerpt: string;
-  // crash = the service exited/restarted (worth retrying); timeout = never became healthy in time
-  reason?: 'crash' | 'timeout' | 'cancelled' | 'other';
+  // crash = the service exited/restarted (worth retrying); timeout = never became healthy in time;
+  // credential_expired = a password/credential expiry was seen in the log - never worth retrying
+  reason?: 'crash' | 'timeout' | 'cancelled' | 'other' | 'credential_expired';
   // ports the log said were already taken
   ports?: number[];
 }
@@ -347,6 +360,18 @@ function watchHealth(client: any, def: SoftwareDefinition, live?: (tail: string)
       if (buffer.length > 40) buffer.shift();
       if (PORT_CONFLICT_RE.test(line)) for (const p of extractPorts(line)) conflictPorts.add(p);
       if (settled) return;
+      if (CREDENTIAL_EXPIRED_RE.test(line)) {
+        // No confirmCrash polling here - unlike a plain crash, this doesn't need 10s of "is it really
+        // down?" checking to be sure trying again won't help. Fail fast.
+        finish({
+          healthy: false,
+          reason: 'credential_expired',
+          excerpt:
+            `${def.name}'s password or credentials look expired - retrying will not help until this is fixed on the server:\n${line}\n\n` +
+            `Recent log:\n${recentLog()}`,
+        });
+        return;
+      }
       scheduleLive();
       if (errorRe && errorRe.test(line)) {
         errorLine = line;
@@ -665,11 +690,13 @@ async function startAttempts(
       endWatch(jobId, step.id);
       if (last.healthy) {
         portConflicts.delete(conflictKey);
+        credentialFailures.delete(conflictKey);
         updateStep(jobId, step.id, { status: 'healthy', log_excerpt: last.excerpt, finished_at: nowIso() });
         recordStatus(server.id, def.id, 'scan', 'up', 'running');
         return true;
       }
       if (last.reason === 'cancelled') return skipStep(endedText(jobId));
+      if (last.reason === 'credential_expired') credentialFailures.add(conflictKey);
       if (last.ports?.length) {
         // Something else is listening on the port(s) it needs. Stop it restarting itself, then give a
         // previous instance that is still shutting down time to let go. If the port stays taken,
@@ -755,6 +782,9 @@ interface Question {
   rollback?: string[];
   // set when the component could not start because something else holds its port: what "Free the port" would do
   portFix?: { label: string; detail: string };
+  // set when the failure was an expired password/credential: retrying can't help, so only Continue /
+  // Roll back are offered (no Retry, no Stop the run)
+  limited?: boolean;
 }
 
 function askOperator(jobId: number, question: Question): Promise<Decision> {
@@ -966,15 +996,19 @@ async function runGroupSequence(
       const holdsBack = transitiveDependents(def.id, dependents, inRun)
         .map((id) => nameOf.get(id))
         .filter((n): n is string => Boolean(n));
+      const limited = credentialFailures.has(pendingKey(jobId, server.id, def.id));
       const choice = await ask({
         component: def.name,
         server: server.name,
         verb,
-        summary: `${def.name}${servers.length > 1 ? ` on ${server.name}` : ''} ${VERB_TEXT[verb].didNot}${verb !== 'stop' && env.startAttempts > 1 ? ` (after up to ${env.startAttempts} attempts)` : ''}.`,
+        summary: limited
+          ? `${def.name}${servers.length > 1 ? ` on ${server.name}` : ''}'s password or credentials look expired - retrying was skipped, it would fail the same way.`
+          : `${def.name}${servers.length > 1 ? ` on ${server.name}` : ''} ${VERB_TEXT[verb].didNot}${verb !== 'stop' && env.startAttempts > 1 ? ` (after up to ${env.startAttempts} attempts)` : ''}.`,
         detail: lastStepReason(jobId, server.id, def.id),
         holdsBack,
         rollback: rollbackNames(def),
         portFix: describeFixFor(jobId, server.id, def.id),
+        limited,
       });
       if (choice === 'retry') {
         ok = await stepFn(jobId, server, def, true, env.startAttempts);

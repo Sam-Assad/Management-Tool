@@ -71,7 +71,7 @@
       "start_script_path": null,
       "stop_script_path": null,
       "log_path": "/Data/logs/application-server/server.log",
-      "success_pattern": "WFLYSRV0025",
+      "success_pattern": "WFLYSRV0025|WFLYSRV0026",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
       "health_timeout_s": 300
     },
