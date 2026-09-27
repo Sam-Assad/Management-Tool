@@ -19,6 +19,10 @@ export const env = {
   startRetryDelayS: Math.max(0, Number(process.env.START_RETRY_DELAY_S ?? 5)),
   // Start All / Restart All: how many components with no Start-before condition are started at the same time
   startParallel: Math.max(1, Number(process.env.START_PARALLEL ?? 4)),
+  // ... and how many seconds to space out the *launch* of each one, even within that limit, so their JVMs
+  // don't all open a DB connection pool in the same instant (a real incident: several Spring Boot apps
+  // starting at once saturated the database and every one of them failed HikariPool initialization together)
+  startStaggerS: Math.max(0, Number(process.env.START_STAGGER_S ?? 6)),
   // a start that hits a port already in use waits this long for the port to be released before giving up
   portReleaseWaitS: Math.max(0, Number(process.env.PORT_RELEASE_WAIT_S ?? 30)),
   // a unit that is running but has not printed its success line after this long gets the "Mark as started" option

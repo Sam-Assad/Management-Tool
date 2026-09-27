@@ -1002,7 +1002,21 @@ async function runGroupSequence(
     const pairs = free.flatMap((def) => servers.map((server) => ({ server, def })));
     // show the whole queue right away: what is running now and what is waiting for a free slot
     for (const { server, def } of pairs) planStep(jobId, server.id, def.id, 'start');
-    await Promise.all(pairs.map(({ server, def }) => limit(() => processOne(server, def, false))));
+    // Stagger the actual launch of each free component, even within the concurrency limit: several JVMs
+    // opening a DB connection pool in the same instant can saturate the database and fail together (seen
+    // in production - a run where 7 Spring Boot apps all failed HikariPool init within the same second).
+    // A shared "next slot" clock spaces launches env.startStaggerS apart; a slot that is already in the
+    // past (the previous launch took longer than the stagger, which is normal) is used immediately.
+    const staggerMs = env.startStaggerS * 1000;
+    let nextSlotAt = 0;
+    const launch = async (server: ServerRow, def: SoftwareDefinition) => {
+      const at = Math.max(Date.now(), nextSlotAt);
+      nextSlotAt = at + staggerMs;
+      const wait = at - Date.now();
+      if (wait > 0) await sleepUnlessEnded(jobId, wait);
+      return processOne(server, def, false);
+    };
+    await Promise.all(pairs.map(({ server, def }) => limit(() => launch(server, def))));
   };
   const all = Promise.all([runChain(), runFree()]);
   // Once the run is ended, do not wait long for a start command that is stuck: the rollback stops it anyway.

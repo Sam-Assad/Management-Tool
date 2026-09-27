@@ -81,6 +81,7 @@ works; see `.env.example`). Real environment variables win over the file.
 | `PORT_RELEASE_WAIT_S` | `30` | A start that fails because a port is already in use waits this long for the port to be released (a previous instance may still be shutting down) before it gives up and names who holds it. |
 | `START_HINT_AFTER_S` | `30` | A unit that is running but hasn't printed its success line after this long gets the **Mark as started** button. |
 | `START_PARALLEL` | `4` | Start / Restart All: how many components that no condition mentions are started at the same time. Each one keeps a log tail open over SSH, and Healthcheck never uses more than 8 SSH channels per server at once, which fits sshd's default `MaxSessions 10`. |
+| `START_STAGGER_S` | `6` | Even within that limit, this many seconds are put between the *launch* of each parallel component, so their processes don't all hit the database (or anything else shared) in the same instant. A component that finishes early frees its slot immediately - the stagger only spaces out the start, not the whole run. |
 | `HEALTHCHECK_DATA_DIR` | `server/data` | Where the SQLite database, the generated SSH keypair, and `master.key` live. Change this if you want the data directory somewhere other than inside the repo. |
 | `HEALTHCHECK_PASSWORD` | *(none — auth currently disabled)* | Reserved for re-enabling the basic-auth gate in `server/src/middleware/auth.ts` if you ever expose this beyond localhost. |
 
@@ -293,7 +294,10 @@ How the orders are worked out:
   WildFly, the rules selectors → rules-interpreter) start **one after another, in order**, each waiting
   until the one before it is healthy. Components that **no condition mentions** start **in parallel**
   — up to `START_PARALLEL` (default 4) at a time, and at the same time as that ordered chain — so
-  ten jars no longer wait for each other. The job panel shows all of them straight away: the ones running
+  ten jars no longer wait for each other. Their *launch* is still staggered `START_STAGGER_S` seconds
+  apart (default 6s) so several JVMs don't open a database connection pool in the same instant — several
+  Spring Boot apps starting at once can saturate a database and fail together, which is worse than
+  starting one after another. The job panel shows all of them straight away: the ones running
   now with their **live log** (the last lines of the log they're being watched on), the rest as "waiting".
 - **Restart All** — forces every component to stop and start again, even if it's already running. Same
   ordered-chain-plus-parallel behaviour as Start All. **Stop All** stays one at a time, in the stop order.
