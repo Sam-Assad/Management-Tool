@@ -977,11 +977,21 @@ async function runGroupSequence(
 
   // One question at a time, even when several components fail together. Once the run is being ended
   // (stop / roll back) nobody is asked again - everyone gets the same answer.
+  //
+  // Components fail concurrently (a "free" one and a chained one can both hit the same expired
+  // credential within moments of each other), so several of them can already be waiting for their turn
+  // in this queue before the operator has answered the first one. Whether a later one should be
+  // auto-continued has to be decided right here, as its turn comes up - not earlier, when it first
+  // failed - otherwise a question that was already queued before the operator's answer still gets shown.
   let queue: Promise<unknown> = Promise.resolve();
-  const ask = (q: Question): Promise<Decision> => {
+  const ask = (q: Question, label: string): Promise<Decision> => {
     const turn = queue.then(async (): Promise<Decision> => {
       const already = ending();
       if (already) return already;
+      if (q.limited && autoContinuePastCredential) {
+        autoContinued.push(label);
+        return 'skip';
+      }
       const choice = await askOperator(jobId, q);
       if (choice === 'halt' || choice === 'rollback') {
         haltedAt = q.component;
@@ -990,6 +1000,7 @@ async function runGroupSequence(
         endRun(jobId, choice);
         sweepPending(jobId);
       }
+      if (q.limited && choice === 'skip') autoContinuePastCredential = true;
       return choice;
     });
     queue = turn.catch(() => undefined);
@@ -1024,16 +1035,11 @@ async function runGroupSequence(
     let ok = await stepFn(jobId, server, def, true, env.startAttempts);
     while (!ok) {
       const limited = credentialFailures.has(pendingKey(jobId, server.id, def.id));
-      let choice: Decision;
-      if (limited && autoContinuePastCredential) {
-        // Same expired credential as one already answered this run - don't ask again.
-        choice = 'skip';
-        autoContinued.push(label(server, def));
-      } else {
-        const holdsBack = transitiveDependents(def.id, dependents, inRun)
-          .map((id) => nameOf.get(id))
-          .filter((n): n is string => Boolean(n));
-        choice = await ask({
+      const holdsBack = transitiveDependents(def.id, dependents, inRun)
+        .map((id) => nameOf.get(id))
+        .filter((n): n is string => Boolean(n));
+      const choice = await ask(
+        {
           component: def.name,
           server: server.name,
           verb,
@@ -1045,9 +1051,9 @@ async function runGroupSequence(
           rollback: rollbackNames(def),
           portFix: describeFixFor(jobId, server.id, def.id),
           limited,
-        });
-        if (limited && choice === 'skip') autoContinuePastCredential = true;
-      }
+        },
+        label(server, def)
+      );
       if (choice === 'retry') {
         ok = await stepFn(jobId, server, def, true, env.startAttempts);
         continue;
