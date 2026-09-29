@@ -151,6 +151,11 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear }: JobProgre
     setDecisionError(null);
     try {
       await api.post(`/jobs/${jobId}/decision`, { choice });
+      // Don't rely solely on the `!job.awaiting` effect below to re-enable the buttons: several
+      // components can fail before this one is even answered, so the next poll can show a brand new
+      // question immediately (awaiting never goes through a falsy tick in between) - that left THAT
+      // question's buttons stuck disabled forever, looking like they were simply unclickable.
+      setDeciding(false);
     } catch (err: any) {
       setDecisionError(err?.message ?? String(err));
       setDeciding(false);
