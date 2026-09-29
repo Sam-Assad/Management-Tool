@@ -270,11 +270,19 @@ is held back).
   behind several components** (a common Oracle account, for example) usually expires for all of them at
   once: the first one still asks, but once you choose Continue, every other component that hits the
   *same* expired-credential failure later in that run is carried past automatically, without asking
-  again — they'd get the identical question with the identical answer anyway. Its Status column also
-  reads **"Failed (due to expired password)"** rather than falling back to whatever systemd happens to
-  report at that instant — several of these units restart themselves automatically (`Restart=`) and keep
-  crash-looping on the same expired password, so a live re-check taken right after can catch one
-  mid-restart and misreport it as "Running" for a moment.
+  again — they'd get the identical question with the identical answer anyway. The unit is also stopped
+  outright as soon as this is confirmed, before the operator even answers — otherwise `Restart=` just
+  keeps bouncing it against the database, hitting it with the same bad password every few seconds, for as
+  long as the run's SSH connection stays open.
+
+  Its Status column reads **"Failed (due to expired password)"**, and stays that way — a scheduled
+  heartbeat re-check on a component parked in this state does not overwrite it with a plain "Stopped" (it
+  genuinely is stopped, that reading isn't wrong, just less useful than the reason already known); it only
+  updates once the component comes back up for real, or a fresh Start/Restart records its own new outcome.
+  The check that decides this looks at the last 300 log lines, not 40 — a Hibernate/Spring stack trace
+  routinely runs past 40 lines once its "Caused by" chain is included, and a smaller window could evict
+  the one line that says why before this ever got a chance to look at it (which is why the same expired
+  password could show up correctly for one component and as a bare "Failed" for another, in the same run).
 
 ### Start & stop order — Conditions
 

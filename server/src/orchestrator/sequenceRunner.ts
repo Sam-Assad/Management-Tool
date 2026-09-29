@@ -270,6 +270,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Without a pattern: healthy = the component is detected running.
 // `live` (optional) receives the latest log lines while waiting, at most about once a second, so the
 // operator can watch the start-up instead of staring at "running".
+// How many recent log lines are kept for the failure excerpt and the expired-credential check. A
+// Hibernate/Spring stack trace routinely runs past 40 lines (several "Caused by" chains, one frame per
+// line) - too small a window here silently evicts the one line that says WHY (`ORA-28001: the password
+// has expired`) before crashed() ever gets a chance to look at it, but keeps it for a shorter trace from
+// a different jar. That's why the same expired password showed up correctly for some components and as
+// a bare "Failed"/"Stopped" for others: pure luck of how long that particular jar's trace happened to be.
+const LOG_BUFFER_LINES = 300;
+
 function watchHealth(client: any, def: SoftwareDefinition, live?: (tail: string) => void): HealthWatch {
   const timeoutMs = def.health_timeout_s * 1000;
   const buffer: string[] = [];
@@ -383,7 +391,7 @@ function watchHealth(client: any, def: SoftwareDefinition, live?: (tail: string)
     const errorRe = def.error_pattern ? new RegExp(def.error_pattern) : null;
     streamTail(client, def.log_path!, (line) => {
       buffer.push(line);
-      if (buffer.length > 40) buffer.shift();
+      if (buffer.length > LOG_BUFFER_LINES) buffer.shift();
       if (PORT_CONFLICT_RE.test(line)) for (const p of extractPorts(line)) conflictPorts.add(p);
       if (settled) return;
       // Only fail fast, without waiting to see if the unit stays up, when this line is ALSO flagged at

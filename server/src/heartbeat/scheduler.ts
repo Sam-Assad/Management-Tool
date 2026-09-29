@@ -10,7 +10,19 @@ import type { SoftwareDefinition, Server as ServerRow } from '@healthcheck/share
 const limit = pLimit(5);
 const KEEP_DAYS = 3;
 
+function latestDetail(serverId: number, softwareId: number): string | null {
+  const row = sqlite
+    .prepare('SELECT detail FROM heartbeat_log WHERE server_id = ? AND software_id = ? ORDER BY id DESC LIMIT 1')
+    .get(serverId, softwareId) as { detail: string | null } | undefined;
+  return row?.detail ?? null;
+}
+
 function record(serverId: number, softwareId: number, source: 'heartbeat' | 'discovery', up: boolean, detail: string) {
+  // A component a run just parked as "Failed (due to expired password)" is still down every time this
+  // beat re-checks it - systemd shows it plainly "inactive"/"stopped", nothing wrong with that reading,
+  // just less useful than the reason we already know. Keep the reason until either it comes back up (a
+  // real change worth recording) or a fresh Start/Restart attempt records its own new outcome.
+  if (source === 'heartbeat' && !up && latestDetail(serverId, softwareId) === 'credential_expired') return;
   insertRow('heartbeat_log', {
     server_id: serverId,
     software_id: softwareId,
