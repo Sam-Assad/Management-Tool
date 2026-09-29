@@ -18,7 +18,7 @@ export function aggregateGroupSoftwareStatus(
   return 'partial';
 }
 
-const KNOWN_STATES = ['running', 'stopped', 'failed', 'starting', 'stopping', 'not_installed', 'unreachable'];
+const KNOWN_STATES = ['running', 'stopped', 'failed', 'starting', 'stopping', 'not_installed', 'unreachable', 'credential_expired'];
 
 export interface ServerComponentStatus {
   server_id: number;

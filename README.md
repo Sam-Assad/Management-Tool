@@ -254,18 +254,27 @@ is held back).
 
 - **Expired password / credential.** A line mentioning an expired password or credential (`ORA-28001:
   the password has expired`, `password ... expired`, `expired ... password`, Active Directory's
-  `data 773`) fails the step **immediately, on the first attempt** — none of the usual retries, since
-  the same login will fail the same way every time until the password is changed on the server. The
-  check looks at the whole recent log, not just the exact line that first looked like an error, since a
-  wrapping exception (a Spring "Application run failed" line, a WildFly JCA pool warning, ...) often logs
-  its own generic line before the real `ORA-28001`-style cause a moment later. The question box then
-  offers only **Continue without it** and **Roll back** — Retry and Stop the run are hidden, since
+  `data 773`) fails the step **without the usual retries**, since the same login will fail the same way
+  every time until the password is changed on the server. It fails **immediately**, on the first attempt,
+  when that line is itself flagged at ERROR/FATAL/SEVERE level (a Spring Boot jar logging its
+  `Application run failed` line is genuinely dead the moment that prints). A line that only *mentions*
+  the expired credential at a lower severity — WildFly's JCA layer logs a WARN ("Unable to fill pool")
+  when one datasource can't connect, but the server itself often still finishes starting a moment later —
+  is **not** treated as fatal on sight: the health check keeps waiting normally, and only if the unit
+  actually goes down (or the health timeout passes) does the same expired-credential check run again to
+  explain why. This avoids the false alarm of giving up on a component that was in fact still going to
+  come up healthy. Either way, once it is treated as a genuine expired-credential failure, the question
+  box offers only **Continue without it** and **Roll back** — Retry and Stop the run are hidden, since
   neither helps here. Continue skips it and carries on with the rest (holding back only what depends on
   it through a condition); Roll back undoes what this run has started so far. **One shared password
   behind several components** (a common Oracle account, for example) usually expires for all of them at
   once: the first one still asks, but once you choose Continue, every other component that hits the
   *same* expired-credential failure later in that run is carried past automatically, without asking
-  again — they'd get the identical question with the identical answer anyway.
+  again — they'd get the identical question with the identical answer anyway. Its Status column also
+  reads **"Failed (due to expired password)"** rather than falling back to whatever systemd happens to
+  report at that instant — several of these units restart themselves automatically (`Restart=`) and keep
+  crash-looping on the same expired password, so a live re-check taken right after can catch one
+  mid-restart and misreport it as "Running" for a moment.
 
 ### Start & stop order — Conditions
 

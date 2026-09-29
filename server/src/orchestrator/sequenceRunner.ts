@@ -206,7 +206,18 @@ function recordStatus(
 
 // After a start that didn't pass its health check: record what systemd really says (a unit can be
 // "active" while our log check failed), so the Status column doesn't claim something that isn't true.
-async function recordActualState(client: any, serverId: number, def: SoftwareDefinition) {
+//
+// `knownReason` skips that live re-check for a failure we're already certain of (credential_expired):
+// many of these units are set to restart on their own (systemd Restart=), so a snapshot taken right
+// after the crash can catch it mid-restart looking "active" again - even though it is only about to
+// fail the exact same way, seconds later, once it hits the database again. The Status column showing
+// "Running" right after the job just gave up on it is confusing and, for a unit stuck in that loop, wrong
+// often enough of the time to not be worth the live check.
+async function recordActualState(client: any, serverId: number, def: SoftwareDefinition, knownReason?: HealthResult['reason']) {
+  if (knownReason === 'credential_expired') {
+    recordStatus(serverId, def.id, 'scan', 'down', 'credential_expired');
+    return;
+  }
   try {
     const { up, state } = await checkComponent(client, def);
     recordStatus(serverId, def.id, 'scan', up ? 'up' : 'down', state);
@@ -375,7 +386,13 @@ function watchHealth(client: any, def: SoftwareDefinition, live?: (tail: string)
       if (buffer.length > 40) buffer.shift();
       if (PORT_CONFLICT_RE.test(line)) for (const p of extractPorts(line)) conflictPorts.add(p);
       if (settled) return;
-      if (CREDENTIAL_EXPIRED_RE.test(line)) {
+      // Only fail fast, without waiting to see if the unit stays up, when this line is ALSO flagged at
+      // ERROR/FATAL/SEVERE level by the component's own pattern (or there's no such pattern to check
+      // against). A JCA pool logging a WARN that merely *mentions* ORA-28001 somewhere in a wrapped
+      // exception - WildFly's real shape for this - does not mean WildFly itself failed to start: it
+      // often still finishes booting "with errors" a moment later, and that success line should still
+      // win. A line severe enough to match the error pattern, though, is worth trusting immediately.
+      if (CREDENTIAL_EXPIRED_RE.test(line) && (!errorRe || errorRe.test(line))) {
         // No confirmCrash polling here - unlike a plain crash, this doesn't need 10s of "is it really
         // down?" checking to be sure trying again won't help. Fail fast.
         finish({
@@ -745,7 +762,7 @@ async function startAttempts(
       log_excerpt: (tried > 1 ? `Failed after ${tried} attempts.\n\n` : '') + last.excerpt,
       finished_at: nowIso(),
     });
-    await recordActualState(client, server.id, def);
+    await recordActualState(client, server.id, def, last.reason);
     return false;
   } catch (err: any) {
     updateStep(jobId, step.id, { status: 'failed', log_excerpt: String(err?.message ?? err), finished_at: nowIso() });
