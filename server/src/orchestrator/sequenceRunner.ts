@@ -392,7 +392,7 @@ function watchHealth(client: any, def: SoftwareDefinition, live?: (tail: string)
       // exception - WildFly's real shape for this - does not mean WildFly itself failed to start: it
       // often still finishes booting "with errors" a moment later, and that success line should still
       // win. A line severe enough to match the error pattern, though, is worth trusting immediately.
-      if (CREDENTIAL_EXPIRED_RE.test(line) && (!errorRe || errorRe.test(line))) {
+      if (!successRe.test(line) && CREDENTIAL_EXPIRED_RE.test(line) && (!errorRe || errorRe.test(line))) {
         // No confirmCrash polling here - unlike a plain crash, this doesn't need 10s of "is it really
         // down?" checking to be sure trying again won't help. Fail fast.
         finish({
@@ -405,12 +405,17 @@ function watchHealth(client: any, def: SoftwareDefinition, live?: (tail: string)
         return;
       }
       scheduleLive();
-      if (errorRe && errorRe.test(line)) {
+      // Success wins when a line matches both patterns: WildFly logs its own "started (with errors)"
+      // summary line - the exact success pattern for that case - AT its own ERROR level, since it
+      // considers any failed deployment an error worth flagging. Checking errorRe first would treat that
+      // line as a possible crash instead of the success it actually is, and the real success line would
+      // never come, since it only prints once - the health check would just hang until the full timeout.
+      if (successRe.test(line)) {
+        finish({ healthy: true, excerpt: line });
+      } else if (errorRe && errorRe.test(line)) {
         errorLine = line;
         if (isSystemd) void confirmCrash(line);
         else finish(crashed(line));
-      } else if (successRe.test(line)) {
-        finish({ healthy: true, excerpt: line });
       }
     })
       .then((stopFn) => {
@@ -756,7 +761,10 @@ async function startAttempts(
       }
       if (last.reason !== 'crash') break; // slow starts aren't retried - waiting again wouldn't be quicker
     }
-    if (last.reason === 'crash') await stopQuietly(client, def); // end the crash loop
+    // End the crash loop (systemd's Restart= would otherwise just keep bouncing it - and hitting the
+    // database with the same bad password - every few seconds, on and on, until someone fixes it).
+    // Done as soon as we give up, not only once the operator answers: there's nothing to wait for.
+    if (last.reason === 'crash' || last.reason === 'credential_expired') await stopQuietly(client, def);
     updateStep(jobId, step.id, {
       status: 'failed',
       log_excerpt: (tried > 1 ? `Failed after ${tried} attempts.\n\n` : '') + last.excerpt,
