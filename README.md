@@ -264,16 +264,15 @@ is held back).
   actually goes down (or the health timeout passes) does the same expired-credential check run again to
   explain why. This avoids the false alarm of giving up on a component that was in fact still going to
   come up healthy. Either way, once it is treated as a genuine expired-credential failure, the question
-  box offers only **Continue without it** and **Roll back** — Retry and Stop the run are hidden, since
-  neither helps here. Continue skips it and carries on with the rest (holding back only what depends on
-  it through a condition); Roll back undoes what this run has started so far. **One shared password
-  behind several components** (a common Oracle account, for example) usually expires for all of them at
-  once: the first one still asks, but once you choose Continue, every other component that hits the
-  *same* expired-credential failure later in that run is carried past automatically, without asking
-  again — they'd get the identical question with the identical answer anyway. The unit is also stopped
-  outright as soon as this is confirmed, before the operator even answers — otherwise `Restart=` just
-  keeps bouncing it against the database, hitting it with the same bad password every few seconds, for as
-  long as the run's SSH connection stays open.
+  box offers only **Continue without it** and **Roll back** (stops everything the run has started so
+  far) — Retry and Stop the run are hidden, since neither helps here. Continue skips it and carries on
+  with the rest (holding back only what depends on it through a condition). **One shared password behind
+  several components** (a common Oracle account, for example) usually expires for all of them at once —
+  each one still gets its own question, since Continuing past one doesn't tell you whether you'd want the
+  same answer for the next; Roll back on any of them stops the whole run, including ones already
+  answered. The unit is also stopped outright as soon as this is confirmed, before the operator even
+  answers — otherwise `Restart=` just keeps bouncing it against the database, hitting it with the same
+  bad password every few seconds, for as long as the run's SSH connection stays open.
 
   Its Status column reads **"Failed (due to expired password)"**, and stays that way — a scheduled
   heartbeat re-check on a component parked in this state does not overwrite it with a plain "Stopped" (it

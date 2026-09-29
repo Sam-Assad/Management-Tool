@@ -899,9 +899,6 @@ interface RunResult {
   // set when the operator chose "Roll back": what was stopped again, and what would not stop
   rolledBack: string[] | null;
   rollbackFailed: string[];
-  // components carried past automatically after the operator chose Continue for the same expired
-  // password/credential earlier in this run
-  autoContinued: string[];
 }
 
 type StepFn = (
@@ -973,11 +970,6 @@ async function runGroupSequence(
   const failed: string[] = [];
   const failedPairs: Array<{ serverId: number; softwareId: number }> = [];
   const blocked: string[] = [];
-  // Once the operator chooses "Continue" past one expired-password failure, every other component hit
-  // by the same expired credential in this run is carried past automatically too, instead of asking
-  // once per component - they'd all get the same two-choice question with the same answer anyway.
-  let autoContinuePastCredential = false;
-  const autoContinued: string[] = [];
   const remaining = new Set<string>();
   const ending = () => runEnding(jobId);
   let haltedAt = null as string | null;
@@ -1008,23 +1000,15 @@ async function runGroupSequence(
     }
   };
 
-  // One question at a time, even when several components fail together. Once the run is being ended
-  // (stop / roll back) nobody is asked again - everyone gets the same answer.
-  //
-  // Components fail concurrently (a "free" one and a chained one can both hit the same expired
-  // credential within moments of each other), so several of them can already be waiting for their turn
-  // in this queue before the operator has answered the first one. Whether a later one should be
-  // auto-continued has to be decided right here, as its turn comes up - not earlier, when it first
-  // failed - otherwise a question that was already queued before the operator's answer still gets shown.
+  // One question at a time, even when several components fail together - including two that hit the
+  // very same expired password: each is a different component and gets its own answer, so every one
+  // still asks. Once the run is being ended (stop / roll back) nobody is asked again - everyone gets the
+  // same answer.
   let queue: Promise<unknown> = Promise.resolve();
-  const ask = (q: Question, label: string): Promise<Decision> => {
+  const ask = (q: Question): Promise<Decision> => {
     const turn = queue.then(async (): Promise<Decision> => {
       const already = ending();
       if (already) return already;
-      if (q.limited && autoContinuePastCredential) {
-        autoContinued.push(label);
-        return 'skip';
-      }
       const choice = await askOperator(jobId, q);
       if (choice === 'halt' || choice === 'rollback') {
         haltedAt = q.component;
@@ -1033,7 +1017,6 @@ async function runGroupSequence(
         endRun(jobId, choice);
         sweepPending(jobId);
       }
-      if (q.limited && choice === 'skip') autoContinuePastCredential = true;
       return choice;
     });
     queue = turn.catch(() => undefined);
@@ -1071,22 +1054,19 @@ async function runGroupSequence(
       const holdsBack = transitiveDependents(def.id, dependents, inRun)
         .map((id) => nameOf.get(id))
         .filter((n): n is string => Boolean(n));
-      const choice = await ask(
-        {
-          component: def.name,
-          server: server.name,
-          verb,
-          summary: limited
-            ? `${def.name}${servers.length > 1 ? ` on ${server.name}` : ''}'s password or credentials look expired - retrying was skipped, it would fail the same way.`
-            : `${def.name}${servers.length > 1 ? ` on ${server.name}` : ''} ${VERB_TEXT[verb].didNot}${verb !== 'stop' && env.startAttempts > 1 ? ` (after up to ${env.startAttempts} attempts)` : ''}.`,
-          detail: lastStepReason(jobId, server.id, def.id),
-          holdsBack,
-          rollback: rollbackNames(def),
-          portFix: describeFixFor(jobId, server.id, def.id),
-          limited,
-        },
-        label(server, def)
-      );
+      const choice = await ask({
+        component: def.name,
+        server: server.name,
+        verb,
+        summary: limited
+          ? `${def.name}${servers.length > 1 ? ` on ${server.name}` : ''}'s password or credentials look expired - retrying was skipped, it would fail the same way.`
+          : `${def.name}${servers.length > 1 ? ` on ${server.name}` : ''} ${VERB_TEXT[verb].didNot}${verb !== 'stop' && env.startAttempts > 1 ? ` (after up to ${env.startAttempts} attempts)` : ''}.`,
+        detail: lastStepReason(jobId, server.id, def.id),
+        holdsBack,
+        rollback: rollbackNames(def),
+        portFix: describeFixFor(jobId, server.id, def.id),
+        limited,
+      });
       if (choice === 'retry') {
         ok = await stepFn(jobId, server, def, true, env.startAttempts);
         continue;
@@ -1153,7 +1133,7 @@ async function runGroupSequence(
     rolledBack = result.done;
     rollbackFailed = result.failed;
   }
-  return { failed, blocked, haltedAt, remaining: [...remaining], rolledBack, rollbackFailed, autoContinued };
+  return { failed, blocked, haltedAt, remaining: [...remaining], rolledBack, rollbackFailed };
 }
 
 function finishSequenceJob(jobId: number, verb: Verb, result: RunResult) {
@@ -1164,10 +1144,6 @@ function finishSequenceJob(jobId: number, verb: Verb, result: RunResult) {
   const t = VERB_TEXT[verb];
   const failWord = verb === 'stop' ? 'did not stop' : verb === 'restart' ? 'did not restart healthy' : 'did not become healthy';
   let message = `${result.failed.join(', ')} ${failWord}.`;
-  if (result.autoContinued.length > 0) {
-    const was = result.autoContinued.length > 1 ? 'were' : 'was';
-    message += ` ${result.autoContinued.join(', ')} hit the same expired password/credential and ${was} continued past automatically.`;
-  }
   if (result.rolledBack) {
     message += ` Rolled back: stopped ${result.rolledBack.length > 0 ? result.rolledBack.join(', ') : 'nothing'}.`;
     if (result.rollbackFailed.length > 0) message += ` Could not stop: ${result.rollbackFailed.join(', ')}.`;

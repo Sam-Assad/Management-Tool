@@ -247,8 +247,7 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear }: JobProgre
           {job.awaiting.limited && (
             <div className="jp-decision-hint jp-decision-urgent">
               This looks like an expired password or credential, so retrying was skipped - it would only fail the same way
-              again. Fix it on the server, then Continue past it or Roll back. If other components hit the same expired
-              credential later in this run, choosing Continue here carries them past too, without asking again.
+              again. Fix it on the server, then Continue past it, or Roll back to stop everything this run has started.
             </div>
           )}
           <div className="jp-decision-hint">
