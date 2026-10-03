@@ -30,9 +30,13 @@ interface Job {
 interface JobProgressPanelProps {
   jobId: number;
   // called whenever the job's state was re-read, so the page can refresh what depends on it
-  onUpdate?: (job: { status: string }) => void;
+  onUpdate?: (job: { status: string; awaiting?: Awaiting | null }) => void;
   // shows a Clear button that dismisses the panel
   onClear?: () => void;
+  // which server this run is for, when a page shows runs for several servers
+  serverName?: string;
+  // false while another run's question is on screen: this one waits its turn instead of stacking on top
+  allowPopup?: boolean;
 }
 
 export const KIND_LABEL: Record<string, string> = {
@@ -79,7 +83,7 @@ function duration(job: Job): string {
   return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
 }
 
-export default function JobProgressPanel({ jobId, onUpdate, onClear }: JobProgressPanelProps) {
+export default function JobProgressPanel({ jobId, onUpdate, onClear, serverName, allowPopup = true }: JobProgressPanelProps) {
   const [job, setJob] = useState<Job | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
@@ -210,7 +214,10 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear }: JobProgre
           {headline}
         </span>
         <span className="jp-title">
-          <b>{KIND_LABEL[job.kind] ?? job.kind}</b>
+          <b>
+            {KIND_LABEL[job.kind] ?? job.kind}
+            {serverName ? ` · ${serverName}` : ''}
+          </b>
           <span className="muted"> · job #{job.id} · {duration(job)}</span>
         </span>
         <span className="jp-counts">
@@ -232,7 +239,7 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear }: JobProgre
         </span>
       </div>
 
-      {job.awaiting && !minimized && (
+      {job.awaiting && !minimized && allowPopup && (
         <DecisionModal
           awaiting={job.awaiting}
           deciding={deciding}
@@ -240,6 +247,12 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear }: JobProgre
           onDecide={decide}
           onMinimize={() => setMinimizedKey(questionKey)}
         />
+      )}
+      {job.awaiting && !minimized && !allowPopup && (
+        <div className="jp-decision">
+          <div className="jp-decision-title">{job.awaiting.summary}</div>
+          <div className="muted">Another run's question is open. This one pops up as soon as that one is answered.</div>
+        </div>
       )}
       {job.awaiting && minimized && (
         <div className="jp-decision">

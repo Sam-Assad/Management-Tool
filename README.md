@@ -109,6 +109,17 @@ Open a server to control it: everything on its page —
 Start All / Restart All / Stop All, the per-component buttons, statuses, logs — applies to that one
 server only.
 
+**Several servers at once.** Each server card on the overview has a tick box, and the bar above the cards has
+**Select all** and **Start All / Restart All / Stop All** for the ticked servers. Each ticked server gets its
+own run, exactly the one its own page's button would start: only the catalog services installed on that
+server, in its own order and with the same checks (WildFly's datasource and traffic checks included). The
+servers run side by side, and there's no order *between* servers. Restart All and Stop All ask for
+confirmation first, naming the servers. Each run gets its own progress panel on the overview, titled with
+its server. If several runs need an answer at the same time, their questions pop up **one at a time**, and
+the others wait in their panel ("this one pops up as soon as that one is answered"). A server that already
+has a run going is refused with the usual "A job is already running on this server" message, which is listed by server name,
+and the other servers still go ahead. Leaving the page and coming back shows the runs still going.
+
 The server page is written so that someone who isn't technical can read it:
 
 - **A headline box at the top** says in one sentence whether the platform on that server works ("Everything

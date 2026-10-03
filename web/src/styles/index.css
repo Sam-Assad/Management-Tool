@@ -357,7 +357,31 @@ section { margin-bottom: 48px; }
   box-shadow: var(--shadow-lg);
   transform: translateY(-3px);
 }
-.group-card h3 { font-size: 1.15rem; }
+.group-card h3 { font-size: 1.15rem; flex: 1; min-width: 0; }
+.group-card { cursor: pointer; }
+.group-card h3 a { color: inherit; text-decoration: none; }
+.group-card h3 a:hover { color: var(--accent); }
+.group-card-selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(224, 22, 31, 0.18), var(--shadow-md); }
+.group-card-selected:hover { border-color: var(--accent); }
+.card-pick { display: inline-flex; align-items: center; padding: 4px; margin: -4px 0 -4px -4px; cursor: pointer; }
+.card-pick input, .fleet-pick-all input { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; margin: 0; }
+.card-busy {
+  font-size: 11.5px; font-weight: 600; color: var(--accent-deep); background: var(--bad-soft);
+  padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+}
+
+/* ---------- several servers at once: tick, then act ---------- */
+.fleet-bar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+  padding: 10px 14px; margin-bottom: 14px; box-shadow: var(--shadow-md);
+}
+.fleet-pick-all { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13.5px; cursor: pointer; }
+.fleet-count { flex: 1; min-width: 180px; font-size: 13px; color: var(--muted-foreground); }
+.fleet-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.fleet-runs { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.fleet-runs:empty { display: none; }
+.fleet-errors { margin: 6px 0 0; padding-left: 18px; }
 
 /* ---------- badges / status chips ---------- */
 .chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
