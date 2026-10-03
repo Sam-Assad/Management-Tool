@@ -26,6 +26,7 @@ import {
   checkWildFlyTraffic,
   notReadyDetail,
 } from '../scan/wildfly.js';
+import { isArtemis, checkArtemis, artemisSummary, saveArtemisCheck, type ArtemisReport } from '../scan/artemis.js';
 import type { SoftwareDefinition, Server as ServerRow } from '@healthcheck/shared';
 
 function nowIso() {
@@ -58,6 +59,24 @@ function loadStopOrderedSoftware(groupId: number): SoftwareDefinition[] {
 
 function createJob(kind: string, groupId: number | null) {
   return insertRow<{ id: number }>('job_runs', { group_id: groupId, kind, status: 'running', started_at: nowIso() });
+}
+
+// A report the run shows as a popup without pausing (stored on the job, so a page opened later still shows it).
+export interface JobNotice {
+  id: string;
+  kind: 'artemis';
+  tone: ArtemisReport['tone'];
+  server: string;
+  component: string;
+  at: string;
+  artemis: ArtemisReport;
+}
+
+function addNotice(jobId: number, notice: Omit<JobNotice, 'id' | 'at'>) {
+  const row = sqlite.prepare('SELECT notices FROM job_runs WHERE id = ?').get(jobId) as { notices: string | null } | undefined;
+  const list: JobNotice[] = row?.notices ? JSON.parse(row.notices) : [];
+  list.push({ ...notice, id: `${jobId}-${list.length + 1}`, at: nowIso() });
+  sqlite.prepare('UPDATE job_runs SET notices = ? WHERE id = ?').run(JSON.stringify(list), jobId);
 }
 
 function finishJob(jobId: number, status: 'succeeded' | 'failed', errorMessage?: string) {
@@ -830,7 +849,18 @@ async function startAttempts(
         credentialFailures.delete(conflictKey);
         datasourceFailures.delete(conflictKey);
         trafficFailures.delete(conflictKey);
-        updateStep(jobId, step.id, { status: 'healthy', log_excerpt: `${last.excerpt}${gate.note}`, finished_at: nowIso() });
+        // Artemis was just (re)started: report its DLQ / ExpiryQueue and memory as a popup. Informative only -
+        // it never fails the step (the start itself already succeeded); memory at or over the threshold makes
+        // the popup a danger warning.
+        let artemisNote = '';
+        if (isArtemis(def) && !runEnding(jobId)) {
+          updateStep(jobId, step.id, { log_excerpt: `${last.excerpt}${gate.note}\n\nReading Artemis's queues and memory...` });
+          const report = await checkArtemis(client, def.log_path, def.detect_method === 'systemd' ? def.detect_value : undefined);
+          saveArtemisCheck(server.id, def.id, 'start', report);
+          addNotice(jobId, { kind: 'artemis', tone: report.tone, server: server.name, component: def.name, artemis: report });
+          artemisNote = `\n\nArtemis report: ${artemisSummary(report)}`;
+        }
+        updateStep(jobId, step.id, { status: 'healthy', log_excerpt: `${last.excerpt}${gate.note}${artemisNote}`, finished_at: nowIso() });
         recordStatus(server.id, def.id, 'scan', 'up', 'running');
         return true;
       }

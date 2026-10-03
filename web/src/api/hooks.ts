@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
+import type { ArtemisReport } from '../components/ArtemisNoticeModal';
 
 export interface ServerSummary {
   id: number;
@@ -224,20 +225,55 @@ export function useDeleteCondition() {
 }
 
 export interface BeatAlert {
+  // wildfly: can't take traffic / database problem; artemis: its own beat found memory too high
+  kind: 'wildfly' | 'artemis';
   server_id: number;
   server_name: string;
   software_id: number;
   software_name: string;
-  state: 'not_ready' | 'datasource_down';
+  state: 'not_ready' | 'datasource_down' | 'memory_high';
   detail: string | null;
+  artemis?: ArtemisReport;
   checked_at: string;
+}
+
+export interface ArtemisCheck {
+  server_id: number;
+  software_id: number;
+  source: 'beat' | 'start' | 'manual';
+  checked_at: string;
+  report: ArtemisReport;
+}
+
+export interface ArtemisStatus {
+  has_artemis: boolean;
+  schedule: string;
+  danger_percent: number;
+  latest: ArtemisCheck | null;
+}
+
+// The latest Artemis reading on a server (DLQ / ExpiryQueue / memory) - database-only, cheap to poll.
+export function useArtemisStatus(serverId: number) {
+  return useQuery({
+    queryKey: ['servers', serverId, 'artemis'],
+    queryFn: () => api.get<ArtemisStatus>(`/servers/${serverId}/artemis`),
+    refetchInterval: 30000,
+  });
+}
+
+export function useArtemisCheckNow(serverId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<ArtemisCheck>(`/servers/${serverId}/artemis-check`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['servers', serverId, 'artemis'] }),
+  });
 }
 
 // What the latest heartbeat found wrong with WildFly anywhere - database-only, cheap to poll.
 export function useBeatAlerts() {
   return useQuery({
     queryKey: ['alerts'],
-    queryFn: () => api.get<{ interval_minutes: number | null; alerts: BeatAlert[] }>('/alerts'),
+    queryFn: () => api.get<{ interval_minutes: number | null; artemis_schedule: string; alerts: BeatAlert[] }>('/alerts'),
     refetchInterval: 30000,
   });
 }

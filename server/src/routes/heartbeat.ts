@@ -8,6 +8,8 @@ import {
 } from '../scan/status.js';
 import { env } from '../env.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { latestArtemisCheck, isArtemis, describeArtemisSchedule, type ArtemisReport } from '../scan/artemis.js';
+import { checkArtemisNow } from '../heartbeat/artemisBeat.js';
 
 export const heartbeatRouter = Router();
 
@@ -50,6 +52,18 @@ heartbeatRouter.get(
   })
 );
 
+interface Alert {
+  kind: 'wildfly' | 'artemis';
+  server_id: number;
+  server_name: string;
+  software_id: number;
+  software_name: string;
+  state: string;
+  detail: string | null;
+  artemis?: ArtemisReport;
+  checked_at: string | null;
+}
+
 // What the latest heartbeat found wrong with WildFly, on every server: running but unable to take traffic, or
 // with datasources that can't connect. Only beats count (not Start/Restart runs, which ask in their own popup),
 // and only while it's still the latest reading. The page pops a warning for each new one.
@@ -68,13 +82,31 @@ heartbeatRouter.get(
     const latestSource = sqlite.prepare(
       'SELECT source FROM heartbeat_log WHERE server_id = ? AND software_id = ? ORDER BY id DESC LIMIT 1'
     );
-    const alerts = rows.flatMap((row) => {
+    const alerts = rows.flatMap((row): Alert[] => {
+      // Artemis: its own beat found it using too much memory (the latest reading, while it still says so)
+      const artemis = latestArtemisCheck(row.server_id, row.software_id);
+      if (artemis && artemis.source === 'beat' && artemis.report.tone === 'danger') {
+        return [
+          {
+            kind: 'artemis' as const,
+            server_id: row.server_id,
+            server_name: row.server_name,
+            software_id: row.software_id,
+            software_name: row.software_name,
+            state: 'memory_high',
+            detail: null,
+            artemis: artemis.report,
+            checked_at: artemis.checked_at,
+          },
+        ];
+      }
       const status = getServerComponentStatus(row.server_id, row.server_name, row.software_id);
       if (status.state !== 'not_ready' && status.state !== 'datasource_down') return [];
       const source = (latestSource.get(row.server_id, row.software_id) as { source: string } | undefined)?.source;
       if (source !== 'heartbeat') return [];
       return [
         {
+          kind: 'wildfly' as const,
           server_id: row.server_id,
           server_name: row.server_name,
           software_id: row.software_id,
@@ -86,7 +118,39 @@ heartbeatRouter.get(
         },
       ];
     });
-    res.json({ interval_minutes: intervalMinutes(), alerts });
+    res.json({ interval_minutes: intervalMinutes(), artemis_schedule: describeArtemisSchedule(), alerts });
+  })
+);
+
+// The latest Artemis reading on a server (DLQ / ExpiryQueue / memory), for the line under its row.
+heartbeatRouter.get(
+  '/servers/:serverId/artemis',
+  asyncHandler(async (req, res) => {
+    const serverId = Number(req.params.serverId);
+    const has = (
+      sqlite
+        .prepare(
+          `SELECT sd.* FROM servers s JOIN group_software gs ON gs.group_id = s.group_id
+           JOIN software_definitions sd ON sd.id = gs.software_id WHERE s.id = ?`
+        )
+        .all(serverId) as any[]
+    ).some((d) => isArtemis(d));
+    res.json({
+      has_artemis: has,
+      schedule: describeArtemisSchedule(),
+      danger_percent: env.artemisMemoryDangerPercent,
+      latest: has ? latestArtemisCheck(serverId) : null,
+    });
+  })
+);
+
+// Check now: read this server's Artemis right away (~2 s) and keep the reading.
+heartbeatRouter.post(
+  '/servers/:serverId/artemis-check',
+  asyncHandler(async (req, res) => {
+    const check = await checkArtemisNow(Number(req.params.serverId));
+    if (!check) return res.status(404).json({ error: "This server doesn't have Artemis." });
+    res.json(check);
   })
 );
 

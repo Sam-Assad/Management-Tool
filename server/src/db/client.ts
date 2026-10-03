@@ -117,6 +117,19 @@ CREATE TABLE IF NOT EXISTS conditions (
   UNIQUE(type, subject_id, target_id)
 );
 
+-- Artemis readings (DLQ / ExpiryQueue / memory): from its own beat, after a start, or on demand.
+CREATE TABLE IF NOT EXISTS artemis_checks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  software_id INTEGER NOT NULL,
+  source TEXT NOT NULL,
+  tone TEXT NOT NULL,
+  report TEXT NOT NULL,
+  checked_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_artemis_checks_pair ON artemis_checks(server_id, software_id, id);
+
 CREATE TABLE IF NOT EXISTS app_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -136,6 +149,8 @@ function ensureColumn(table: string, column: string, definition: string) {
 ensureColumn('software_definitions', 'default_rank', 'INTEGER');
 // JSON of the question a running job is waiting for the operator to answer (null when it isn't)
 ensureColumn('job_runs', 'awaiting', 'TEXT');
+// JSON array of reports the run shows the operator as a popup, without pausing (e.g. Artemis after a start)
+ensureColumn('job_runs', 'notices', 'TEXT');
 
 export const dataDirPath = dataDir;
 

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useBeatAlerts, type BeatAlert } from '../api/hooks';
 import { ToneIcon } from './DecisionModal';
+import { size } from './ArtemisNoticeModal';
 
 // Warnings already closed, one per heartbeat reading. A later beat that still finds the problem is a new
 // reading, so the warning comes back every interval until it's fixed.
@@ -32,6 +33,19 @@ function time(iso: string): string {
 }
 
 function Problem({ alert }: { alert: BeatAlert }) {
+  if (alert.kind === 'artemis' && alert.artemis) {
+    const r = alert.artemis;
+    return (
+      <>
+        <b>It's using too much memory:</b>{' '}
+        {r.heapUsedBytes !== null && r.heapMaxBytes !== null ? `${size(r.heapUsedBytes)} of ${size(r.heapMaxBytes)} (${r.heapPercent}%)` : 'over the limit'}
+        , so messages may pile up or slow down.
+        <span className="ba-facts">
+          DLQ {r.dlq ?? '—'} · ExpiryQueue {r.expiry ?? '—'}
+        </span>
+      </>
+    );
+  }
   if (alert.state === 'not_ready') {
     // the reason may end with "N database connections are failing: A, B, C." - those names read better as chips
     const m = (alert.detail ?? '').match(/^(.*?)\s*(\d+ database connections? (?:is|are) failing): (.+)\.$/s);
@@ -87,8 +101,14 @@ export default function BeatAlertModal() {
   }
 
   const software = [...new Set(open.map((a) => a.software_name))];
-  const title = `${software.length === 1 ? software[0] : 'WildFly'} has issues, please check`;
+  const title = software.length === 1 ? `${software[0]} has issues, please check` : `${software.join(' and ')} have issues, please check`;
   const every = data?.interval_minutes;
+  const kinds = new Set(open.map((a) => a.kind));
+  // when the next check comes depends on which check found it: WildFly's heartbeat or Artemis's own beat
+  const schedule = [
+    kinds.has('wildfly') && every ? `WildFly is checked every ${every} minutes` : null,
+    kinds.has('artemis') && data?.artemis_schedule ? `Artemis's queues and memory are checked ${data.artemis_schedule}` : null,
+  ].filter(Boolean);
 
   return createPortal(
     <div className="modal-overlay">
@@ -142,8 +162,8 @@ export default function BeatAlertModal() {
           </button>
         </div>
         <p className="dm-hint">
-          {every ? `Healthcheck checks every ${every} minutes. ` : ''}This warning comes back if the next check still
-          finds the problem.
+          {schedule.length ? `${schedule.join('; ')}. ` : ''}This warning comes back if the next check still finds the
+          problem.
         </p>
       </div>
     </div>,

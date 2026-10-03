@@ -18,15 +18,100 @@ import {
   useStopAll,
   useRestartOne,
   useStopOne,
+  useArtemisStatus,
+  useArtemisCheckNow,
 } from '../api/hooks';
 import type { ServerSummary } from '../api/hooks';
 import JobProgressPanel from '../components/JobProgressPanel';
+import { size } from '../components/ArtemisNoticeModal';
 import RowMenu from '../components/RowMenu';
 import '../styles/server-page.css';
 import LogViewer from '../components/LogViewer';
 import LoadState from '../components/LoadState';
 import InfoTip from '../components/InfoTip';
 import { api } from '../api/client';
+
+const ARTEMIS_SOURCE: Record<string, string> = { beat: 'scheduled check', start: 'after it started', manual: 'checked on demand' };
+
+function when(iso: string): string {
+  const d = new Date(iso);
+  const today = new Date().toDateString() === d.toDateString();
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return today ? `today ${time}` : `${d.toLocaleDateString([], { day: 'numeric', month: 'short' })} ${time}`;
+}
+
+// Artemis's last reading, in a box at the top of the page: DLQ, ExpiryQueue and memory, when and how it was
+// read, and Check now. Red when memory is at or over the limit.
+function ArtemisBox({ serverId }: { serverId: number }) {
+  const { data } = useArtemisStatus(serverId);
+  const checkNow = useArtemisCheckNow(serverId);
+  if (!data?.has_artemis) return null;
+  const last = data.latest;
+  const r = last?.report;
+  const danger = r?.tone === 'danger';
+  const mem =
+    r && r.heapPercent !== null && r.heapUsedBytes !== null && r.heapMaxBytes !== null
+      ? { used: size(r.heapUsedBytes), max: size(r.heapMaxBytes), pct: r.heapPercent }
+      : null;
+  const unread = (v: number | null | undefined) => (v === null || v === undefined ? (last ? "couldn't read" : 'not read yet') : v === 1 ? 'message' : 'messages');
+
+  return (
+    <section className={`sv-artemis${danger ? ' sv-artemis-danger' : ''}`} aria-labelledby="sv-artemis-title">
+      <div className="sv-artemis-head">
+        <h2 id="sv-artemis-title">Artemis queues and memory</h2>
+        <span className="sv-artemis-when">
+          {last ? `Read ${when(last.checked_at)} (${ARTEMIS_SOURCE[last.source] ?? last.source}).` : 'Not read yet.'}{' '}
+          <button className="sv-linkbtn" disabled={checkNow.isPending} onClick={() => checkNow.mutate()} title="Reads DLQ, ExpiryQueue and memory now. Changes nothing.">
+            {checkNow.isPending ? 'Checking…' : 'Check now'}
+          </button>
+        </span>
+      </div>
+
+      {danger && mem && (
+        <p className="sv-artemis-alert" role="alert">
+          Memory too high: Artemis is using {mem.pct}% of the memory it's given (the limit is {data.danger_percent}%). Messages may
+          pile up or slow down.
+        </p>
+      )}
+
+      <div className="an-stats">
+        <div className={`an-stat${r?.dlq ? ' an-stat-flag' : ''}`}>
+          <span className="an-label">DLQ</span>
+          <b>{r?.dlq ?? '—'}</b>
+          <span className="an-sub">{unread(r?.dlq)}</span>
+        </div>
+        <div className={`an-stat${r?.expiry ? ' an-stat-flag' : ''}`}>
+          <span className="an-label">ExpiryQueue</span>
+          <b>{r?.expiry ?? '—'}</b>
+          <span className="an-sub">{unread(r?.expiry)}</span>
+        </div>
+        <div className={`an-stat an-stat-mem${danger ? ' an-stat-danger' : ''}`}>
+          <span className="an-label">Memory</span>
+          {mem ? (
+            <>
+              <b>
+                {mem.used} <span className="an-of">of {mem.max}</span>
+              </b>
+              <span className="an-bar" aria-hidden="true">
+                <span style={{ width: `${Math.min(100, mem.pct)}%` }} />
+              </span>
+              <span className="an-sub">{mem.pct}% used</span>
+            </>
+          ) : (
+            <>
+              <b>—</b>
+              <span className="an-sub">{last ? "couldn't read" : 'not read yet'}</span>
+            </>
+          )}
+        </div>
+      </div>
+
+      {r && r.notes.length > 0 && <p className="sv-artemis-note">{r.notes.join(' ')}</p>}
+      {checkNow.isError && <p className="sv-artemis-note">Couldn't check: {String((checkNow.error as Error)?.message ?? checkNow.error)}</p>}
+      <p className="sv-artemis-foot">Read {data.schedule}, and each time Artemis is started or restarted from here.</p>
+    </section>
+  );
+}
 
 // Re-render on a timer so "checked 3 min ago" keeps counting while nothing else changes.
 function useNow(intervalMs: number) {
@@ -481,6 +566,8 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
           <InfoTip>Checks that Healthcheck can still log in to this server.</InfoTip>
         </span>
       </header>
+
+      <ArtemisBox serverId={server.id} />
 
       <section className={`sv-verdict sv-verdict-${verdict.tone}`} aria-labelledby="sv-verdict-title">
         <StateIcon tone={verdict.tone as Tone} size={44} />

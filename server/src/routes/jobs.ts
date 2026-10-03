@@ -75,6 +75,8 @@ jobsRouter.get(
     res.json({
       ...job,
       awaiting: job.awaiting ? JSON.parse(job.awaiting) : null,
+      // reports shown as a popup without pausing the run (Artemis's queues and memory after a start)
+      notices: job.notices ? JSON.parse(job.notices) : [],
       // acceptable: the unit runs but its log has not shown the success line - the operator may vouch for it
       steps: (steps as any[]).map((step) => ({ ...step, acceptable: step.status === 'running' && isAcceptable(id, step.id) })),
     });

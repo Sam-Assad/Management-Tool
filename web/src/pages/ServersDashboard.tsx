@@ -133,7 +133,7 @@ export default function ServersDashboard() {
   const busyServers = new Set(runs.filter((r) => runState[r.jobId]?.running !== false).map((r) => r.serverId));
   const selectedServers = list.filter((s) => selected.has(s.id));
   const allSelected = list.length > 0 && selectedServers.length === list.length;
-  // only one run's question on screen at a time: the earliest one that's asking
+  // only one run's popup (question or Artemis report) on screen at a time: the earliest one that has one
   const askingJobId = runs.find((r) => runState[r.jobId]?.asking)?.jobId ?? null;
 
   function toggle(serverId: number) {
@@ -330,7 +330,7 @@ export default function ServersDashboard() {
             serverName={run.serverName}
             allowPopup={askingJobId === null || askingJobId === run.jobId}
             onUpdate={(job) => {
-              const next = { running: job.status === 'running', asking: Boolean(job.awaiting) };
+              const next = { running: job.status === 'running', asking: Boolean(job.wantsPopup ?? job.awaiting) };
               const prev = runState[run.jobId];
               if (prev?.running === next.running && prev?.asking === next.asking) return;
               setRunState((all) => ({ ...all, [run.jobId]: next }));

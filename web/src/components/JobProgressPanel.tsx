@@ -2,6 +2,18 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import InfoTip from './InfoTip';
 import DecisionModal, { type Awaiting, type Choice } from './DecisionModal';
+import ArtemisNoticeModal, { type JobNotice } from './ArtemisNoticeModal';
+
+// reports already closed in this browser (a page opened later doesn't show them again)
+const SEEN_KEY = 'hc-seen-notices';
+function loadSeen(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SEEN_KEY) ?? '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 interface Step {
   id: number;
@@ -19,6 +31,8 @@ interface Step {
 interface Job {
   id: number;
   awaiting?: Awaiting | null;
+  // reports shown as a popup without pausing the run (Artemis's queues and memory after a start)
+  notices?: JobNotice[];
   kind: string;
   status: string;
   error_message: string | null;
@@ -30,7 +44,8 @@ interface Job {
 interface JobProgressPanelProps {
   jobId: number;
   // called whenever the job's state was re-read, so the page can refresh what depends on it
-  onUpdate?: (job: { status: string; awaiting?: Awaiting | null }) => void;
+  // wantsPopup: it has a question or an unread report to put on screen
+  onUpdate?: (job: { status: string; awaiting?: Awaiting | null; wantsPopup?: boolean }) => void;
   // shows a Clear button that dismisses the panel
   onClear?: () => void;
   // which server this run is for, when a page shows runs for several servers
@@ -95,6 +110,22 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear, serverName,
   const previousStatus = useRef<string | null>(null);
   const onUpdateRef = useRef(onUpdate);
   onUpdateRef.current = onUpdate;
+  const [seen, setSeen] = useState<string[]>(loadSeen);
+  const seenRef = useRef(seen);
+  seenRef.current = seen;
+  const report = (j: Job, seenIds: string[]) =>
+    onUpdateRef.current?.({ ...j, wantsPopup: Boolean(j.awaiting) || (j.notices ?? []).some((n) => !seenIds.includes(n.id)) });
+
+  function closeNotice(id: string) {
+    const next = [...seenRef.current, id];
+    setSeen(next);
+    try {
+      localStorage.setItem(SEEN_KEY, JSON.stringify(next.slice(-200)));
+    } catch {
+      // storage blocked: closing still works for this visit
+    }
+    if (job) report(job, next);
+  }
 
   // Read the job straight from the server (instead of relying on a live event stream that can
   // connect after a quick job has already finished): every 1.5 s while it runs, once when done.
@@ -112,7 +143,7 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear, serverName,
         if (cancelled) return;
         setJob(next);
         setLoadError(null);
-        onUpdateRef.current?.(next);
+        report(next, seenRef.current);
         // A run that ended with nothing wrong folds itself down to one summary line.
         const wasRunning = previousStatus.current === 'running';
         previousStatus.current = next.status;
@@ -205,6 +236,9 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear, serverName,
   const rows = onlyProblems ? job.steps.filter((s) => s.status === 'failed' || s.status === 'blocked') : job.steps;
   const questionKey = job.awaiting ? `${job.awaiting.component}|${job.awaiting.server}|${job.awaiting.expires_at}` : null;
   const minimized = questionKey !== null && questionKey === minimizedKey;
+  // a report waits while a question is on screen; one at a time
+  const notice = (job.notices ?? []).find((n) => !seen.includes(n.id));
+  const questionShown = Boolean(job.awaiting) && !minimized;
 
   return (
     <div className={`jp jp-${outcome}`}>
@@ -248,6 +282,7 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear, serverName,
           onMinimize={() => setMinimizedKey(questionKey)}
         />
       )}
+      {notice && allowPopup && !questionShown && <ArtemisNoticeModal notice={notice} onClose={() => closeNotice(notice.id)} />}
       {job.awaiting && !minimized && !allowPopup && (
         <div className="jp-decision">
           <div className="jp-decision-title">{job.awaiting.summary}</div>

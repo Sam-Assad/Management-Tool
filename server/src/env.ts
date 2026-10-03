@@ -31,5 +31,16 @@ export const env = {
   wildflyCliPath: process.env.WILDFLY_CLI_PATH ?? '/Data/software/bin/wildfly-26.1.3.Final/bin/jboss-cli.sh',
   // after a WildFly start, how long to keep asking whether it's ready to receive traffic before giving up
   wildflyReadyTimeoutS: Math.max(0, Number(process.env.WILDFLY_READY_TIMEOUT_S ?? 60)),
+  // Artemis report after each start/restart: its login is the same on every market's broker. The password
+  // comes from .env (gitignored) so it never lands in the repository.
+  artemisUser: process.env.ARTEMIS_USER ?? 'loyalty_management',
+  artemisPassword: process.env.ARTEMIS_PASSWORD ?? '',
+  artemisUrl: process.env.ARTEMIS_URL ?? 'tcp://localhost:61616',
+  // used when the broker's instance folder can't be read from its running process
+  artemisInstance: process.env.ARTEMIS_INSTANCE ?? '/Data/software/bin/loyalty-management-broker',
+  // heap use at or above this share of the heap Artemis is given turns the report into a danger warning
+  // Artemis's own beat (DLQ / ExpiryQueue / memory): three times a day by default, on the Healthcheck machine's clock
+  artemisCheckCron: process.env.ARTEMIS_CHECK_CRON ?? '0 8,14,20 * * *',
+  artemisMemoryDangerPercent: Math.min(100, Math.max(1, Number(process.env.ARTEMIS_MEMORY_DANGER_PERCENT ?? 50))),
   nodeEnv: process.env.NODE_ENV ?? 'development',
 };

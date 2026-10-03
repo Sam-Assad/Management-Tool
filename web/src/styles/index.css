@@ -565,6 +565,33 @@ button.danger:hover { border-color: var(--bad); box-shadow: 0 4px 14px rgba(215,
 .dm-btn-danger:hover { background: var(--bad-soft); }
 .dm-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
+/* Artemis's report after a start: DLQ, ExpiryQueue, memory */
+.an-info { background: linear-gradient(180deg, #f1f2f4 0%, #fafafb 45%, #ffffff 100%); border: 1px solid var(--border); }
+.an-info .dm-btn-main { background: #1d2025; border-color: #1d2025; color: #fff; }
+.an-info .dm-btn-main:hover { background: #3a3f47; }
+.an-icon-info { background: #fff; color: #5b616b; border: 4px solid #8a919b; box-shadow: 0 0 0 8px rgba(138, 145, 155, 0.14); }
+.an-stats { display: grid; grid-template-columns: 1fr 1fr 1.6fr; gap: 8px; width: 100%; }
+.an-stat {
+  background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; min-width: 0;
+}
+.an-stat b { font-size: 1.45rem; line-height: 1.2; color: #1d2025; }
+.an-label { font-size: 12px; font-weight: 600; color: var(--muted-foreground); }
+.an-sub { font-size: 11.5px; color: var(--muted-foreground); }
+.an-of { font-size: 0.8rem; font-weight: 500; color: var(--muted-foreground); }
+.an-stat-flag b { color: var(--bad); }
+.an-bar { width: 100%; height: 6px; border-radius: 99px; background: #e4e6eb; overflow: hidden; margin: 4px 0 2px; }
+.an-bar span { display: block; height: 100%; border-radius: inherit; background: var(--ok); }
+.an-stat-danger { border-color: rgba(215, 20, 28, 0.4); background: var(--bad-soft); }
+.an-stat-danger b { color: var(--bad); }
+.an-stat-danger .an-bar span { background: var(--bad); }
+.an-alert { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--bad); font-weight: 600; }
+.an-logline {
+  display: block; margin-top: 6px; font-family: var(--font-mono, monospace); font-size: 11.5px; text-align: left;
+  background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; overflow-wrap: anywhere;
+}
+@media (max-width: 520px) { .an-stats { grid-template-columns: 1fr 1fr; } .an-stat-mem { grid-column: 1 / -1; } }
+
 /* the background check's warning: one box per server it found WildFly unhealthy on */
 .ba-list { list-style: none; margin: 0; padding: 0; width: 100%; display: flex; flex-direction: column; gap: 8px; }
 .ba-item {
@@ -576,6 +603,7 @@ button.danger:hover { border-color: var(--bad); box-shadow: 0 4px 14px rgba(215,
 .ba-problem { margin: 4px 0 0; font-size: 13.5px; line-height: 1.5; color: #3a3f47; }
 .ba-problem b { color: var(--bad); }
 .ba-chips { justify-content: flex-start; margin-top: 8px; }
+.ba-facts { display: block; margin-top: 6px; font-size: 12.5px; color: var(--muted-foreground); }
 
 .modal-header span { font-family: var(--font-display); font-size: 1.1rem; }
 .modal-controls { display: flex; gap: 10px; align-items: center; }

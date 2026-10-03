@@ -88,6 +88,12 @@ works; see `.env.example`). Real environment variables win over the file.
 | `START_STAGGER_S` | `6` | Even within that limit, this many seconds are put between the *launch* of each parallel component, so their processes don't all hit the database (or anything else shared) in the same instant. A component that finishes early frees its slot immediately - the stagger only spaces out the start, not the whole run. |
 | `WILDFLY_CLI_PATH` | `/Data/software/bin/wildfly-26.1.3.Final/bin/jboss-cli.sh` | Where `jboss-cli.sh` is on the servers, for WildFly's datasource and traffic checks (see *WildFly's database connections and traffic*). The same path is used on every server. |
 | `WILDFLY_READY_TIMEOUT_S` | `60` | After WildFly starts, how long to keep checking whether it can receive traffic before counting it as a failure. |
+| `ARTEMIS_USER` | `loyalty_management` | Broker login for the Artemis report after each start/restart (see *Artemis report after a start*). |
+| `ARTEMIS_PASSWORD` | *(none)* | That login's password. **Put it in `.env`** (gitignored), so it never ends up in the repository. Without it the queues can't be read on a broker that checks passwords, and the report says so. |
+| `ARTEMIS_URL` | `tcp://localhost:61616` | Where the broker's CLI connects, run on the server itself. |
+| `ARTEMIS_INSTANCE` | `/Data/software/bin/loyalty-management-broker` | Only a fallback: the instance folder is normally read from the running broker's `-Dartemis.instance=`. |
+| `ARTEMIS_CHECK_CRON` | `0 8,14,20 * * *` | When Artemis's own beat reads DLQ, ExpiryQueue and memory: every day at 08:00, 14:00 and 20:00, on the clock of the machine running Healthcheck. |
+| `ARTEMIS_MEMORY_DANGER_PERCENT` | `50` | At or above this share of its heap in use (e.g. 2 GB of 4 GB), the Artemis report becomes a red danger warning. |
 | `HEALTHCHECK_DATA_DIR` | `server/data` | Where the SQLite database, the generated SSH keypair, and `master.key` live. Change this if you want the data directory somewhere other than inside the repo. |
 | `HEALTHCHECK_PASSWORD` | *(none — auth currently disabled)* | Reserved for re-enabling the basic-auth gate in `server/src/middleware/auth.ts` if you ever expose this beyond localhost. |
 
@@ -390,6 +396,55 @@ datasources, gives the likely cause in plain words, and keeps the raw `WFLYJCA�
 other expired password. WildFly's status becomes **Failed (database connection)**, and its row on the
 server page lists the failing datasources (the **×** hides that list; it comes back if a different set
 starts failing).
+
+### Artemis: queues and memory
+
+Healthcheck reads Artemis's **DLQ**, **ExpiryQueue** and **memory** at three moments:
+
+| When | What you see |
+|---|---|
+| **Artemis's own beat**, every day at 08:00, 14:00 and 20:00 (`ARTEMIS_CHECK_CRON`), on every server that has Artemis | The line under Artemis on the server page updates. If memory is at **50% or more**, a red **"Artemis has issues, please check"** popup appears on any page, the same warning WildFly's heartbeat uses. It comes back at the next beat while the problem lasts. |
+| **After Healthcheck starts or restarts it** (see below) | The report popup on the run, and the line updates. |
+| **Check now**, on the line itself | The line updates (about 2 seconds). |
+
+**The line under Artemis** on the server page shows the last reading:
+`DLQ 32 · ExpiryQueue 0 · Memory 71 MB of 4 GB (1.7%) · today 14:00 (scheduled check) · Check now`.
+- It turns red, starting with **Memory too high**, at or above the threshold.
+- If Artemis wasn't running at that moment, the line says so, and nothing is raised. A stopped Artemis is
+  already shown by its status.
+
+The beat only reads, and never starts or stops anything. If Healthcheck itself was down at a scheduled time,
+it catches up once on start, but only when the last scheduled reading is over 8 hours old, so restarting the
+app doesn't re-read every broker. Readings are kept for 30 days.
+
+#### Artemis report after a start
+
+Each time Healthcheck **starts or restarts Artemis**, whether on its own or as part of Start All or
+Restart All, and its log says it's live, a popup reports on it. A broker that was already running and left
+untouched gets no popup. The report shows:
+
+| | Where it comes from |
+|---|---|
+| **DLQ** and **ExpiryQueue**: messages in each | `artemis queue stat` (the broker's own CLI, run from its instance folder) |
+| **Memory**: heap in use **out of** the heap Artemis is given | `jcmd <pid> GC.heap_info`, and `-Xmx` from its command line |
+| Warnings and errors logged **since this start** | the catalog's log path, matched on Artemis's `AMQ222…` (warning) and `AMQ224…` (error) codes, which works whatever the log layout (plain text or JSON) |
+
+- **Gray, "Artemis started":** the normal report.
+- **Red, "Artemis is using too much memory":** heap in use is **50% or more** of what it's given
+  (`ARTEMIS_MEMORY_DANGER_PERCENT`). For example, 2 GB used of 4 GB.
+- **"Take a look":** something couldn't be read (the note says what, e.g. "the broker did not answer within
+  60 s"), or errors were logged since the start.
+
+The report never fails or pauses the run, because the start itself already succeeded. Its one-line summary
+is also kept in the step's log ("Artemis report: DLQ 32 messages, ExpiryQueue 0. Memory 71 MB of 4 GB
+(1.7%)."). The popup waits while a run's question is on screen. On the overview, with several runs going,
+popups come one at a time. Once closed with **OK**, it doesn't show again in that browser.
+
+Everything is gathered by one SSH command on the server, in about 2 seconds. The `artemis` CLI is a Java
+program, about 2 CPU-seconds, and is limited to 60 s, because when it can't reach the broker it otherwise
+retries forever. The broker process is found through its systemd unit's main PID (or, failing that, the
+process running `...boot.Artemis run`). Its instance folder is read from that process, so nothing is set per
+market.
 
 ### Start & stop order — Conditions
 

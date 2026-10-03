@@ -3,6 +3,7 @@ import { sqlite } from './db/client.js';
 import { normalizeServerGroups } from './db/serverGroups.js';
 import { env } from './env.js';
 import { startHeartbeatScheduler } from './heartbeat/scheduler.js';
+import { startArtemisScheduler } from './heartbeat/artemisBeat.js';
 import { resequenceAll } from './orchestrator/ordering.js';
 import { applyBundledDefaults } from './db/defaults.js';
 
@@ -50,3 +51,4 @@ app.listen(env.port, env.host, () => {
   console.log(`Healthcheck server listening on http://${env.host}:${env.port}`);
 });
 startHeartbeatScheduler();
+startArtemisScheduler();
