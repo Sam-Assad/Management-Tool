@@ -152,7 +152,7 @@ export async function checkComponent(
           // datasource is already known to be broken. Not being able to take traffic is the bigger problem, so
           // it wins, with the broken datasources added to its reason.
           const ds = await checkWildFlyDatasources(client);
-          const traffic = await checkWildFlyTraffic(client);
+          const traffic = await checkWildFlyTraffic(client, ds.bindingsOutput);
           if (traffic.checked && !traffic.ok) {
             const problems = [...traffic.problems];
             if (ds.failures.length > 0) {

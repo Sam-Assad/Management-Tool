@@ -732,13 +732,13 @@ async function startAttempts(
       updateStep(jobId, step.id, { log_excerpt: `${dsNote}\n\nChecking that ${def.name} can receive traffic...` });
       // Readiness can trail the "started" log line by a few seconds while deployments finish: keep asking.
       const deadline = Date.now() + env.wildflyReadyTimeoutS * 1000;
-      let traffic = await checkWildFlyTraffic(client);
+      let traffic = await checkWildFlyTraffic(client, ds.bindingsOutput);
       while (traffic.checked && !traffic.ok && Date.now() < deadline && !runEnding(jobId)) {
         updateStep(jobId, step.id, {
           log_excerpt: `${dsNote}\n\nNot ready for traffic yet - checking again (gives up after ${env.wildflyReadyTimeoutS}s):\n${traffic.problems.join('\n')}`,
         });
         await sleepUnlessEnded(jobId, 5000);
-        if (!runEnding(jobId)) traffic = await checkWildFlyTraffic(client);
+        if (!runEnding(jobId)) traffic = await checkWildFlyTraffic(client, ds.bindingsOutput);
       }
       if (runEnding(jobId)) return { ok: false, note: '', ended: true };
       if (!traffic.checked) return { ok: true, note: `\n\n${dsNote}\n${traffic.note}` };

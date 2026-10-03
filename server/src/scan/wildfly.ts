@@ -65,19 +65,105 @@ async function testOne(client: Client, kind: Kind, name: string) {
   return parseOutcome(`${res.stdout}\n${res.stderr}`);
 }
 
-export async function checkWildFlyDatasources(client: Client): Promise<DatasourceCheck> {
+// ---- several CLI commands in ONE jboss-cli.sh -----------------------------------------------------
+// Every jboss-cli.sh call starts a JVM (~2 CPU-seconds, ~160 MB for a moment), so a beat that made one call
+// per datasource cost ~16 of them. Here the commands are fed to a single jboss-cli.sh on stdin, where it runs
+// each line as if typed at its prompt. Unlike `--commands=a,b` or a CLI `for` loop - both stop at the first
+// failing command - a failed datasource test doesn't stop the rest, and each command prints exactly the
+// reply it prints on its own. `echo $m <key>` before each command marks where its reply starts: the CLI
+// echoes the typed line with a literal "$m", so only the real output carries the expanded marker.
+const MARK = '@@HC@@';
+const MARK_RE = new RegExp(`${MARK} (\\S+)\\s*$`);
+
+// The CLI's output, split by marker: key -> that command's reply. A reply only counts once the next marker
+// (or the final END) shows it was printed in full.
+export function splitCliSections(output: string): Map<string, string> {
+  const sections = new Map<string, string>();
+  let key: string | null = null;
+  let buf: string[] = [];
+  for (const line of output.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split(/\r?\n/)) {
+    const m = line.match(MARK_RE);
+    if (m) {
+      if (key && key !== m[1]) sections.set(key, buf.join('\n'));
+      if (key !== m[1]) buf = [];
+      key = m[1];
+      continue;
+    }
+    if (key && !line.startsWith('[')) buf.push(line); // skip the CLI's "[standalone@host:9990 /] <command>" echo
+  }
+  return sections;
+}
+
+async function cliScript(client: Client, commands: { key: string; command: string }[], timeoutMs: number): Promise<Map<string, string>> {
+  const lines = [`set m=${MARK}`, ...commands.flatMap((c) => [`echo $m ${c.key}`, c.command]), 'echo $m END'];
+  const res = await runCommand(client, `printf '%s\\n' ${lines.map(shQuote).join(' ')} | ${shQuote(env.wildflyCliPath)} --connect 2>&1`, timeoutMs);
+  return splitCliSections(`${res.stdout}\n${res.stderr}`);
+}
+
+// `:read-children-names` reply -> the names, or the failure (deduplicated: some CLI logging setups print a reply twice)
+export function parseChildNames(reply: string): { names: string[]; error?: string } {
+  const r = parseOutcome(reply);
+  if (r.outcome !== 'success') return { names: [], error: r.detail || 'no reply' };
+  const block = reply.match(/"result"\s*=>\s*\[([\s\S]*?)\]/)?.[1] ?? '';
+  return { names: [...new Set([...block.matchAll(/"([^"]+)"/g)].map((m) => m[1]))].filter((n) => /^[\w.-]+$/.test(n)) };
+}
+
+const BINDINGS_COMMAND = '/socket-binding-group=*/socket-binding=*:read-resource(include-runtime=true)';
+
+export async function checkWildFlyDatasources(client: Client): Promise<DatasourceCheck & { bindingsOutput?: string }> {
   try {
-    const [regular, xa] = await Promise.all([list(client, 'data-source'), list(client, 'xa-data-source')]);
+    // Call 1: what's there - both kinds of datasource, plus WildFly's listening addresses for the traffic check.
+    let regular: { names: string[]; error?: string };
+    let xa: { names: string[]; error?: string };
+    let bindingsOutput: string | undefined;
+    let discovered: Map<string, string> | null = null;
+    try {
+      discovered = await cliScript(
+        client,
+        [
+          { key: 'ds', command: '/subsystem=datasources:read-children-names(child-type=data-source)' },
+          { key: 'xa', command: '/subsystem=datasources:read-children-names(child-type=xa-data-source)' },
+          { key: 'bindings', command: BINDINGS_COMMAND },
+        ],
+        90_000,
+      );
+    } catch {
+      discovered = null;
+    }
+    if (discovered?.has('ds') && discovered.has('xa')) {
+      regular = parseChildNames(discovered.get('ds')!);
+      xa = parseChildNames(discovered.get('xa')!);
+      bindingsOutput = discovered.get('bindings');
+    } else {
+      // the one-call script didn't run (couldn't connect, an unexpected CLI) - the original one-call-per-list way
+      [regular, xa] = await Promise.all([list(client, 'data-source'), list(client, 'xa-data-source')]);
+    }
     if (regular.error && xa.error) {
       return { checked: false, tested: [], failures: [], note: `Could not list WildFly's datasources: ${regular.error.slice(0, 300)}` };
     }
     const targets = [...regular.names.map((name) => ({ kind: 'data-source' as Kind, name })), ...xa.names.map((name) => ({ kind: 'xa-data-source' as Kind, name }))];
+
+    // Call 2: test them all. Each keeps the 60 s it had as a separate call.
+    let replies = new Map<string, string>();
+    if (targets.length > 0) {
+      try {
+        replies = await cliScript(
+          client,
+          targets.map((t, i) => ({ key: `t${i}`, command: `/subsystem=datasources/${t.kind}=${t.name}:test-connection-in-pool` })),
+          60_000 * (targets.length + 1),
+        );
+      } catch {
+        replies = new Map();
+      }
+    }
     const failures: DatasourceFailure[] = [];
-    for (const t of targets) {
-      const r = await testOne(client, t.kind, t.name);
+    for (const [i, t] of targets.entries()) {
+      let r = replies.has(`t${i}`) ? parseOutcome(replies.get(`t${i}`)!) : null;
+      // no complete reply for this one in the batch: test it on its own, exactly as before
+      if (!r || r.outcome === 'unknown') r = await testOne(client, t.kind, t.name);
       if (r.outcome !== 'success') failures.push({ name: t.name, reason: r.detail || 'test-connection-in-pool failed' });
     }
-    return { checked: true, tested: targets.map((t) => t.name), failures };
+    return { checked: true, tested: targets.map((t) => t.name), failures, bindingsOutput };
   } catch (err: any) {
     return { checked: false, tested: [], failures: [], note: `Could not run the datasource check: ${String(err?.message ?? err)}` };
   }
@@ -243,11 +329,16 @@ export function notReadyReason(r: Readiness): string {
   return text;
 }
 
-export async function checkWildFlyTraffic(client: Client): Promise<TrafficCheck> {
+// `bindingsOutput`: the addresses as the datasource check already read them (they don't change while WildFly
+// runs) - saves starting jboss-cli.sh again. Read here when missing or unreadable.
+export async function checkWildFlyTraffic(client: Client, bindingsOutput?: string): Promise<TrafficCheck> {
   const notChecked = (note: string): TrafficCheck => ({ checked: false, ok: true, summary: '', problems: [], note });
   try {
-    const res = await runCommand(client, cli('/socket-binding-group=*/socket-binding=*:read-resource(include-runtime=true)'), 60_000);
-    const bindings = parseSocketBindings(`${res.stdout}\n${res.stderr}`);
+    let bindings = parseSocketBindings(bindingsOutput ?? '');
+    if (bindings.size === 0) {
+      const res = await runCommand(client, cli(BINDINGS_COMMAND), 60_000);
+      bindings = parseSocketBindings(`${res.stdout}\n${res.stderr}`);
+    }
     const mgmt = bindings.get('management-http');
     const webName = bindings.has('http') ? 'http' : bindings.has('https') ? 'https' : null;
     const web = webName ? bindings.get(webName)! : undefined;

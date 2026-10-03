@@ -320,10 +320,18 @@ WildFly/JBoss) Healthcheck runs two more checks in order, over the same SSH conn
 **Database connections.** Healthcheck tests every datasource WildFly has:
 
 1. It asks WildFly which datasources it has, so nothing has to be configured per market:
-   `jboss-cli.sh --connect command='ls /subsystem=datasources/data-source'` (and `xa-data-source`).
+   `/subsystem=datasources:read-children-names(child-type=data-source)` (and `xa-data-source`).
    The loyalty, sales and usage servers each get their own datasources tested.
 2. It runs `test-connection-in-pool` on each one, which borrows a real connection right now.
-   Roughly 1.3 s per datasource, so about 18 s for 13 of them.
+
+Each `jboss-cli.sh` start is a small Java program (about 2 CPU-seconds and 130–160 MB for a second), so
+the whole check uses **two** of them, however many datasources there are. The first call lists the
+datasources and reads WildFly's listening addresses for the traffic check. The second tests them all.
+The commands are fed to `jboss-cli.sh` as a script on stdin. Unlike `--commands=a,b` or a CLI `for`
+loop, which both stop at the first failing command, this way a failing datasource doesn't stop the rest,
+and every test prints the same reply it would on its own. If a reply ever comes back missing or cut off,
+that datasource is re-tested by itself. Tested against WildFly 26.1.3: the same datasources, the same
+failures and the same error text as one call per datasource.
 
 `jboss-cli.sh` is found at `WILDFLY_CLI_PATH`; it runs locally on the server, so no WildFly management
 user is needed. If the listing itself can't run, the check is skipped and the step says why. It never
@@ -530,7 +538,7 @@ Start/Restart/Stop job (step by step while it runs), and right after a server is
 discovered. The page re-reads statuses every 15 seconds, so a new beat appears on its own — no reload.
 If a server is unreachable it's tried once per beat (not once per component), so a down host can't
 stall the check. Status history is kept for 3 days. For a running WildFly each beat also runs the
-datasource and traffic checks (see *WildFly's database connections and traffic*), which add about 1.3 s per datasource plus a few seconds; a failure is
+datasource and traffic checks (see *WildFly's database connections and traffic*), which add two `jboss-cli.sh` calls and two `curl` requests; a failure is
 flagged, never acted on. A component parked as *Failed (due to expired password)*, *Failed (can't receive traffic)* or *Failed (database
 connection)* keeps that status while it stays down, instead of turning into a bare "Stopped" at the next beat.
 
@@ -541,6 +549,20 @@ the tool. It names the server, says what's wrong in plain words (failing databas
 beat if the problem is still there. The page asks `GET /api/alerts` every 30 seconds for what the latest beat
 found. Problems found by a Start/Restart run don't use this popup, because the run already asks you in its own.
 The warning only shows while the tool is open in a browser; it doesn't send email or chat messages.
+
+**What a beat costs a server.** Nothing is installed on the servers, and nothing stays running between
+beats. A beat runs short commands over one reused SSH connection. These figures were measured on an
+8-core, 16 GB loyalty server:
+
+| Part of the beat | How often | CPU | Memory (for its few seconds) |
+|---|---|---|---|
+| `systemctl show`, one per application (~20) | every beat | ~0.15 CPU-s in total | ~10 MB |
+| WildFly: two `jboss-cli.sh` calls (list + addresses, then all datasource tests) | only while WildFly runs | ~2–3 CPU-s each, ~5 CPU-s in total | ~130–200 MB, one call at a time |
+| WildFly: two `curl` requests (`/health/ready`, web port) | only while WildFly runs | ~0.02 CPU-s | ~10 MB |
+
+A beat costs about 5–6 CPU-seconds when WildFly is running, mostly within a few seconds, and under 1
+CPU-second when it isn't. Spread over 30 minutes that's about 0.04% of an 8-core server. Each
+datasource test also makes one small connection check against its database.
 
 ### Logs
 
