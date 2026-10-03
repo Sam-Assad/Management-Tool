@@ -7,6 +7,7 @@ import SoftwareCatalogPage from './pages/SoftwareCatalogPage';
 import ConditionsPage from './pages/ConditionsPage';
 import JobDetailPage from './pages/JobDetailPage';
 import TopBar from './components/TopBar';
+import BeatAlertModal from './components/BeatAlertModal';
 import { IconServer, IconCatalog, IconConditions, IconChevronLeft, IconChevronRight, IconPlus } from './components/Icons';
 
 function loadCollapsed(): boolean {
@@ -94,6 +95,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
+      <BeatAlertModal />
     </div>
   );
 }

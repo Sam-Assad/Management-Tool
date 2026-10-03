@@ -15,6 +15,8 @@ export interface Awaiting {
   // set when WildFly started but some of its datasources failed a connection test
   datasources?: string[];
   cause?: string;
+  // set when WildFly's datasources connect but it can't receive traffic
+  notReady?: string;
   expires_at: string;
 }
 
@@ -24,12 +26,13 @@ type Tone = 'error' | 'warning';
 
 function look(a: Awaiting): { tone: Tone; title: string } {
   if (a.datasources?.length) return { tone: 'error', title: 'Database connection problem' };
+  if (a.notReady) return { tone: 'error', title: "Can't receive traffic" };
   if (a.limited) return { tone: 'warning', title: 'Password expired' };
   if (a.portFix) return { tone: 'warning', title: 'Port already in use' };
   return { tone: 'error', title: `${a.component} ${a.verb === 'stop' ? "didn't stop" : "didn't start"}` };
 }
 
-function ToneIcon({ tone }: { tone: Tone }) {
+export function ToneIcon({ tone }: { tone: Tone }) {
   return (
     <span className={`dm-icon dm-icon-${tone}`} aria-hidden="true">
       {tone === 'error' ? (

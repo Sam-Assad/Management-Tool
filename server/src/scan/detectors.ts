@@ -1,7 +1,14 @@
 import type { Client } from 'ssh2';
 import type { SoftwareDefinition } from '@healthcheck/shared';
 import { runCommand } from '../ssh/exec.js';
-import { isWildFly, checkWildFlyDatasources, datasourceDownDetail, type DatasourceFailure } from './datasources.js';
+import {
+  isWildFly,
+  checkWildFlyDatasources,
+  datasourceDownDetail,
+  checkWildFlyTraffic,
+  notReadyDetail,
+  type DatasourceFailure,
+} from './wildfly.js';
 
 export interface UnitState {
   installed: boolean;
@@ -105,7 +112,17 @@ export function systemctlCommand(action: 'start' | 'stop', unit: string): string
 // What a component is doing right now, in words an operator understands. `up` is true only
 // for 'running'; every other state counts as down for sequencing/heartbeat purposes.
 // 'datasource_down' = WildFly is active, but one or more of its datasources fail a connection test.
-export type ComponentState = 'running' | 'stopped' | 'failed' | 'starting' | 'stopping' | 'not_installed' | 'unreachable' | 'datasource_down';
+// 'not_ready' = WildFly is active and its datasources connect, but it can't receive traffic.
+export type ComponentState =
+  | 'running'
+  | 'stopped'
+  | 'failed'
+  | 'starting'
+  | 'stopping'
+  | 'not_installed'
+  | 'unreachable'
+  | 'datasource_down'
+  | 'not_ready';
 
 export const COMPONENT_STATES: ComponentState[] = [
   'running',
@@ -116,6 +133,7 @@ export const COMPONENT_STATES: ComponentState[] = [
   'not_installed',
   'unreachable',
   'datasource_down',
+  'not_ready',
 ];
 
 // `detail` is what to store in heartbeat_log.detail - the state word, or for datasource_down the state
@@ -123,14 +141,28 @@ export const COMPONENT_STATES: ComponentState[] = [
 export async function checkComponent(
   client: Client,
   def: SoftwareDefinition
-): Promise<{ up: boolean; state: ComponentState; detail: string; datasources?: DatasourceFailure[] }> {
+): Promise<{ up: boolean; state: ComponentState; detail: string; datasources?: DatasourceFailure[]; notReady?: string[] }> {
   if (def.detect_method === 'systemd') {
     const unit = await probeComponentUnit(client, def);
     if (!unit.installed) return { up: false, state: 'not_installed', detail: 'not_installed' };
     switch (unit.active) {
       case 'active': {
         if (isWildFly(def)) {
+          // Both checks always run here (Check now / heartbeat): "can users reach it?" matters even when a
+          // datasource is already known to be broken. Not being able to take traffic is the bigger problem, so
+          // it wins, with the broken datasources added to its reason.
           const ds = await checkWildFlyDatasources(client);
+          const traffic = await checkWildFlyTraffic(client);
+          if (traffic.checked && !traffic.ok) {
+            const problems = [...traffic.problems];
+            if (ds.failures.length > 0) {
+              const names = ds.failures.map((f) => f.name);
+              problems.push(
+                `${names.length === 1 ? '1 database connection is' : `${names.length} database connections are`} failing: ${names.join(', ')}.`,
+              );
+            }
+            return { up: false, state: 'not_ready', detail: notReadyDetail(problems), notReady: problems, datasources: ds.failures };
+          }
           if (ds.failures.length > 0) {
             return { up: false, state: 'datasource_down', detail: datasourceDownDetail(ds.failures), datasources: ds.failures };
           }

@@ -54,6 +54,10 @@ export function getServerComponentStatus(
     // "datasource_down:CONVERSIONS,LOYALTY_TRX" - the names are what the UI shows
     state = 'datasource_down';
     shownDetail = detail.slice('datasource_down:'.length) || null;
+  } else if (detail.startsWith('not_ready')) {
+    // "not_ready:<why it can't take traffic>"
+    state = 'not_ready';
+    shownDetail = detail.slice('not_ready:'.length) || null;
   } else if (row.status === 'up') state = 'running';
   else state = KNOWN_STATES.includes(detail) ? detail : 'stopped';
   return {

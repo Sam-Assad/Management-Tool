@@ -20,9 +20,9 @@
   --ring: #e0161f;
   --donut-track: #e8eaee;
 
-  /* status: working = charcoal, in progress = mid gray, not checked = light gray, problem = red */
-  --ok: #2b3038;
-  --ok-soft: #e9ebef;
+  /* status: working = green, problem = red, stopped / in progress / not checked = grays */
+  --ok: #15803d;
+  --ok-soft: #e8f6ed;
   --warn: #5f6670;
   --warn-soft: #f0f1f4;
   --bad: #d7141c;
@@ -541,6 +541,18 @@ button.danger:hover { border-color: var(--bad); box-shadow: 0 4px 14px rgba(215,
 .dm-btn-danger:hover { background: var(--bad-soft); }
 .dm-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
+/* the background check's warning: one box per server it found WildFly unhealthy on */
+.ba-list { list-style: none; margin: 0; padding: 0; width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.ba-item {
+  background: #fff; border: 1px solid rgba(215, 20, 28, 0.2); border-left: 4px solid var(--bad);
+  border-radius: 12px; padding: 10px 14px; text-align: left;
+}
+.ba-where { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 13.5px; }
+.ba-where .muted { font-size: 12px; }
+.ba-problem { margin: 4px 0 0; font-size: 13.5px; line-height: 1.5; color: #3a3f47; }
+.ba-problem b { color: var(--bad); }
+.ba-chips { justify-content: flex-start; margin-top: 8px; }
+
 .modal-header span { font-family: var(--font-display); font-size: 1.1rem; }
 .modal-controls { display: flex; gap: 10px; align-items: center; }
 .log-view {
@@ -615,11 +627,11 @@ button.danger:hover { border-color: var(--bad); box-shadow: 0 4px 14px rgba(215,
 .status-line { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; }
 .status-pulse {
   width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: 0 0 auto;
-  box-shadow: 0 0 0 0 rgba(43, 48, 56, 0.5); animation: status-ping 2.4s ease-out infinite;
+  box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.5); animation: status-ping 2.4s ease-out infinite;
 }
 @keyframes status-ping {
-  0% { box-shadow: 0 0 0 0 rgba(43, 48, 56, 0.5); }
-  70%, 100% { box-shadow: 0 0 0 8px rgba(43, 48, 56, 0); }
+  0% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.5); }
+  70%, 100% { box-shadow: 0 0 0 8px rgba(22, 163, 74, 0); }
 }
 
 /* ---------- job panel (compact) ---------- */
@@ -724,7 +736,7 @@ button.danger:hover { border-color: var(--bad); box-shadow: 0 4px 14px rgba(215,
   font-size: 13.5px; border: 1px solid var(--border);
 }
 .alert-bad { background: var(--bad-soft); border-color: rgba(215, 20, 28, 0.3); color: #a80f15; }
-.alert-ok { background: var(--ok-soft); border-color: rgba(43, 48, 56, 0.3); color: #2b3038; }
+.alert-ok { background: var(--ok-soft); border-color: rgba(21, 128, 61, 0.3); color: #14532d; }
 .alert > span { flex: 1; min-width: 0; }
 .alert button { padding: 2px 9px; font-size: 12px; background: transparent; }
 

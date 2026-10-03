@@ -59,7 +59,10 @@ function firstLine(text: string | null): string {
 }
 
 function stateLabel(step: Step, isScan: boolean): string {
-  if (isScan && step.status === 'failed') return step.log_excerpt?.startsWith('running, but') ? 'database problem' : 'not running';
+  if (isScan && step.status === 'failed') {
+    if (step.log_excerpt?.startsWith("running, but can't receive traffic")) return 'no traffic';
+    return step.log_excerpt?.startsWith('running, but') ? 'database problem' : 'not running';
+  }
   if (step.status === 'healthy' && (step.action === 'stop' || step.action === 'rollback')) return 'stopped';
   if (step.status === 'healthy' && step.action === 'free_port') return 'freed';
   return STEP_LABEL[step.status] ?? step.status;

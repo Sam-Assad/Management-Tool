@@ -223,6 +223,25 @@ export function useDeleteCondition() {
   });
 }
 
+export interface BeatAlert {
+  server_id: number;
+  server_name: string;
+  software_id: number;
+  software_name: string;
+  state: 'not_ready' | 'datasource_down';
+  detail: string | null;
+  checked_at: string;
+}
+
+// What the latest heartbeat found wrong with WildFly anywhere - database-only, cheap to poll.
+export function useBeatAlerts() {
+  return useQuery({
+    queryKey: ['alerts'],
+    queryFn: () => api.get<{ interval_minutes: number | null; alerts: BeatAlert[] }>('/alerts'),
+    refetchInterval: 30000,
+  });
+}
+
 export interface ServerComponentStatus {
   server_id: number;
   server_name: string;

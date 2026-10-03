@@ -50,16 +50,18 @@ function timeAgo(iso: string, now: number): string {
 const LOCKED = 'Something is already running on this server - wait for it to finish (or answer its question) first.';
 
 // ---- Plain-language view of each state ---------------------------------------------------------
-type Tone = 'ok' | 'bad' | 'busy' | 'idle';
-type GroupId = 'datasource_down' | 'credential_expired' | 'failed' | 'unreachable' | 'stopped' | 'busy' | 'working' | 'idle';
+// working = green, has a problem = red, stopped (nothing wrong, just not running) = gray
+type Tone = 'ok' | 'bad' | 'stopped' | 'busy' | 'idle';
+type GroupId = 'datasource_down' | 'not_ready' | 'credential_expired' | 'failed' | 'unreachable' | 'stopped' | 'busy' | 'working' | 'idle';
 
 const STATE_VIEW: Record<string, { label: string; tone: Tone; group: GroupId }> = {
   running: { label: 'Working', tone: 'ok', group: 'working' },
   datasource_down: { label: "Can't reach its database", tone: 'bad', group: 'datasource_down' },
+  not_ready: { label: "Can't receive traffic", tone: 'bad', group: 'not_ready' },
   credential_expired: { label: 'Password expired', tone: 'bad', group: 'credential_expired' },
   failed: { label: 'Stopped with an error', tone: 'bad', group: 'failed' },
   unreachable: { label: "Couldn't be checked", tone: 'bad', group: 'unreachable' },
-  stopped: { label: 'Stopped', tone: 'bad', group: 'stopped' },
+  stopped: { label: 'Stopped', tone: 'stopped', group: 'stopped' },
   starting: { label: 'Starting', tone: 'busy', group: 'busy' },
   stopping: { label: 'Stopping', tone: 'busy', group: 'busy' },
   mixed: { label: 'Partly running', tone: 'busy', group: 'busy' },
@@ -74,6 +76,12 @@ const GROUPS: { id: GroupId; title: string; advice: string }[] = [
     title: "Can't reach the database",
     advice:
       "It's running, but its connections to the database fail, so the applications that rely on it don't work. Get the database or its password fixed, then restart it.",
+  },
+  {
+    id: 'not_ready',
+    title: "Can't receive traffic",
+    advice:
+      "It's running and its database connections work, but it isn't accepting requests, so people can't reach the applications on it. Restart it, or open its log to see why.",
   },
   {
     id: 'credential_expired',
@@ -118,6 +126,11 @@ function StateIcon({ tone, size = 22 }: { tone: Tone; size?: number }) {
         <svg width={size * 0.6} height={size * 0.6} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round">
           <path d="M12 5.5v8" />
           <circle cx="12" cy="18.5" r="0.9" fill="currentColor" />
+        </svg>
+      )}
+      {tone === 'stopped' && (
+        <svg width={size * 0.4} height={size * 0.4} viewBox="0 0 24 24" fill="currentColor">
+          <rect x="4" y="4" width="16" height="16" rx="3" />
         </svg>
       )}
     </span>
@@ -333,12 +346,14 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
   const counts = {
     ok: services.filter((s) => s.view.tone === 'ok').length,
     bad: services.filter((s) => s.view.tone === 'bad').length,
+    stopped: services.filter((s) => s.view.tone === 'stopped').length,
     busy: services.filter((s) => s.view.tone === 'busy').length,
     idle: services.filter((s) => s.view.tone === 'idle').length,
   };
   const groups = GROUPS.map((g) => ({ ...g, members: services.filter((s) => s.view.group === g.id) })).filter((g) => g.members.length > 0);
   const problemGroups = groups.filter((g) => g.members[0].view.tone === 'bad');
   const otherGroups = groups.filter((g) => g.members[0].view.tone !== 'bad');
+  const alsoStopped = counts.stopped === 0 ? '' : counts.stopped === 1 ? ' One more is stopped.' : ` ${counts.stopped} more are stopped.`;
 
   const verdict =
     total === 0
@@ -346,25 +361,32 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
       : counts.bad > 0
         ? {
             tone: 'bad',
-            title: counts.bad === 1 ? `1 of ${total} services needs attention` : `${counts.bad} of ${total} services need attention`,
-            text: `The loyalty platform on ${server.name} isn't fully working. The list below says what's wrong with each one and what to do.`,
+            title: counts.bad === 1 ? `1 of ${total} services has a problem` : `${counts.bad} of ${total} services have a problem`,
+            text: `The loyalty platform on ${server.name} isn't fully working. The list below says what's wrong with each one and what to do.${alsoStopped}`,
           }
         : counts.busy > 0
           ? { tone: 'busy', title: 'Changes in progress', text: `${counts.busy} of ${total} services are starting or stopping right now.` }
-          : counts.idle === total
-            ? { tone: 'idle', title: 'Waiting for the first check', text: 'Healthcheck is about to look at every service on this server.' }
-            : { tone: 'ok', title: 'Everything is working', text: `All ${counts.ok} services on ${server.name} are up and running.` };
+          : counts.stopped > 0
+            ? {
+                tone: 'stopped',
+                title: counts.stopped === total ? `Everything on ${server.name} is stopped` : `${counts.stopped} of ${total} services are stopped`,
+                text: 'Nothing is broken, they just aren\'t running. Start them one by one, or all at once with Start All.',
+              }
+            : counts.idle === total
+              ? { tone: 'idle', title: 'Waiting for the first check', text: 'Healthcheck is about to look at every service on this server.' }
+              : { tone: 'ok', title: 'Everything is working', text: `All ${counts.ok} services on ${server.name} are up and running.` };
 
   const busyTitle = jobRunning ? LOCKED : undefined;
 
   const renderRow = (s: Service) => {
-    const down = s.view.tone === 'bad' && s.state !== 'datasource_down' && s.state !== 'unreachable';
+    const down = (s.view.tone === 'bad' || s.view.tone === 'stopped') && s.state !== 'datasource_down' && s.state !== 'not_ready' && s.state !== 'unreachable';
     const showDsCallout = s.datasources.length > 0 && !dismissedAlerts.includes(s.alertKey);
     return (
       <li key={s.id} id={`svc-${s.id}`} className={`sv-row sv-tone-${s.view.tone}`}>
         <StateIcon tone={s.view.tone} />
         <div className="sv-main">
           <div className="sv-name">{s.name}</div>
+          {s.state === 'not_ready' && s.rawDetail && <div className="sv-state">{s.rawDetail}</div>}
           {s.datasources.length > 0 && !showDsCallout && (
             <div className="sv-state">
               {s.datasources.length} database connection{s.datasources.length > 1 ? 's' : ''} failing
@@ -406,7 +428,7 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
               Start
             </button>
           )}
-          {s.state === 'datasource_down' && (
+          {(s.state === 'datasource_down' || s.state === 'not_ready') && (
             <button
               className="sv-start"
               disabled={jobRunning}

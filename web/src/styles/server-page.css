@@ -1,7 +1,7 @@
 /* Server page - written for someone who isn't technical: one verdict, then problems grouped by cause
    with what to do about them. Red only ever means "needs attention"; working is calm charcoal. */
 .sv-page {
-  --sv-ok: #2b3038;
+  --sv-ok: #16a34a;
   --sv-bad: #e0161f;
   --sv-busy: #8a919b;
   --sv-idle: #c9cdd4;
@@ -15,6 +15,7 @@
 }
 .sv-icon-ok { background: var(--sv-ok); border-color: var(--sv-ok); }
 .sv-icon-bad { background: var(--sv-bad); border-color: var(--sv-bad); box-shadow: 0 0 0 4px rgba(224, 22, 31, 0.14); }
+.sv-icon-stopped { background: #8a919b; border-color: #8a919b; }
 .sv-icon-busy { border-color: #e4e6eb; border-top-color: var(--sv-busy); animation: sv-spin 0.9s linear infinite; }
 @keyframes sv-spin { to { transform: rotate(360deg); } }
 
@@ -35,6 +36,8 @@
 .sv-verdict-body { min-width: 0; }
 .sv-verdict .sv-icon { margin-top: 2px; }
 .sv-verdict-bad { border-color: rgba(224, 22, 31, 0.3); background: linear-gradient(90deg, #fdf0f0 0%, #ffffff 42%); }
+.sv-verdict-ok { border-color: rgba(22, 163, 74, 0.3); background: linear-gradient(90deg, #ecf8f0 0%, #ffffff 42%); }
+.sv-verdict-stopped { border-color: var(--border-strong); background: linear-gradient(90deg, #eef0f3 0%, #ffffff 42%); }
 .sv-verdict-title { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.015em; line-height: 1.25; margin: 0 0 4px; }
 .sv-verdict-text { font-size: 14.5px; line-height: 1.5; color: #4b5159; margin: 0; max-width: 70ch; }
 .sv-checked { margin: 10px 0 0; font-size: 13px; color: var(--muted-foreground); }
@@ -74,7 +77,9 @@
   display: inline-flex; align-items: center; justify-content: center; background: var(--muted); color: var(--muted-foreground);
 }
 .sv-group-bad .sv-count { background: var(--sv-bad); color: #fff; }
-.sv-group-ok .sv-count { background: #e6e8ec; color: var(--sv-ok); }
+.sv-group-ok .sv-count { background: #e8f6ed; color: #15803d; }
+.sv-group-ok .sv-list { border-color: rgba(22, 163, 74, 0.25); }
+.sv-group-stopped .sv-count { background: #8a919b; color: #fff; }
 
 .sv-list { list-style: none; margin: 0; padding: 0; background: var(--card); border: 1px solid var(--border); border-radius: 16px; }
 .sv-group-bad .sv-list { border-color: rgba(224, 22, 31, 0.28); box-shadow: 0 6px 20px rgba(224, 22, 31, 0.07); }
@@ -87,6 +92,8 @@
 .sv-tone-bad .sv-state { color: #c0121a; }
 .sv-tone-ok .sv-state { color: var(--sv-ok); }
 .sv-tone-busy .sv-state { color: var(--sv-busy); }
+.sv-tone-stopped .sv-start { border-color: var(--border-strong); color: var(--foreground); }
+.sv-tone-stopped .sv-start:hover { background: var(--muted); border-color: #8a919b; }
 .sv-tech { margin-top: 6px; font-family: var(--font-mono); font-size: 12px; color: var(--muted-foreground); }
 
 .sv-callout {

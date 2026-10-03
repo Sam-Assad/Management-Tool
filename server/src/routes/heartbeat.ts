@@ -50,6 +50,46 @@ heartbeatRouter.get(
   })
 );
 
+// What the latest heartbeat found wrong with WildFly, on every server: running but unable to take traffic, or
+// with datasources that can't connect. Only beats count (not Start/Restart runs, which ask in their own popup),
+// and only while it's still the latest reading. The page pops a warning for each new one.
+heartbeatRouter.get(
+  '/alerts',
+  asyncHandler(async (_req, res) => {
+    const rows = sqlite
+      .prepare(
+        `SELECT s.id AS server_id, s.name AS server_name, sd.id AS software_id, sd.name AS software_name
+         FROM servers s
+         JOIN group_software gs ON gs.group_id = s.group_id
+         JOIN software_definitions sd ON sd.id = gs.software_id
+         ORDER BY s.name, gs.sequence_order`
+      )
+      .all() as { server_id: number; server_name: string; software_id: number; software_name: string }[];
+    const latestSource = sqlite.prepare(
+      'SELECT source FROM heartbeat_log WHERE server_id = ? AND software_id = ? ORDER BY id DESC LIMIT 1'
+    );
+    const alerts = rows.flatMap((row) => {
+      const status = getServerComponentStatus(row.server_id, row.server_name, row.software_id);
+      if (status.state !== 'not_ready' && status.state !== 'datasource_down') return [];
+      const source = (latestSource.get(row.server_id, row.software_id) as { source: string } | undefined)?.source;
+      if (source !== 'heartbeat') return [];
+      return [
+        {
+          server_id: row.server_id,
+          server_name: row.server_name,
+          software_id: row.software_id,
+          software_name: row.software_name,
+          state: status.state,
+          // not_ready: the reason in words; datasource_down: the failed datasource names, comma-separated
+          detail: status.detail,
+          checked_at: status.checked_at,
+        },
+      ];
+    });
+    res.json({ interval_minutes: intervalMinutes(), alerts });
+  })
+);
+
 heartbeatRouter.get(
   '/groups/:groupId/suggestions',
   asyncHandler(async (req, res) => {

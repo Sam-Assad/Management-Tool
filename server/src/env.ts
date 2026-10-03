@@ -13,7 +13,7 @@ export const env = {
   port: Number(process.env.PORT ?? 4000),
   host: process.env.HOST ?? '127.0.0.1',
   password: process.env.HEALTHCHECK_PASSWORD,
-  heartbeatCron: process.env.HEARTBEAT_INTERVAL_CRON ?? '*/5 * * * *',
+  heartbeatCron: process.env.HEARTBEAT_INTERVAL_CRON ?? '*/30 * * * *',
   // Start All / Restart All: how many times to try a component that keeps crashing before asking you
   startAttempts: Math.max(1, Number(process.env.START_ATTEMPTS ?? 3)),
   startRetryDelayS: Math.max(0, Number(process.env.START_RETRY_DELAY_S ?? 5)),
@@ -29,5 +29,7 @@ export const env = {
   startHintAfterS: Math.max(1, Number(process.env.START_HINT_AFTER_S ?? 30)),
   // jboss-cli.sh path for WildFly's post-start datasource check - the same across every market/server.
   wildflyCliPath: process.env.WILDFLY_CLI_PATH ?? '/Data/software/bin/wildfly-26.1.3.Final/bin/jboss-cli.sh',
+  // after a WildFly start, how long to keep asking whether it's ready to receive traffic before giving up
+  wildflyReadyTimeoutS: Math.max(0, Number(process.env.WILDFLY_READY_TIMEOUT_S ?? 60)),
   nodeEnv: process.env.NODE_ENV ?? 'development',
 };

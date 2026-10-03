@@ -7,6 +7,7 @@ const COLORS: Record<string, string> = {
   up: 'ok',
   ok: 'ok',
   down: 'bad',
+  stopped: 'pending',
   unreachable: 'bad',
   auth_failed: 'bad',
   partial: 'warn',

@@ -3,10 +3,11 @@
 // 'mixed' (servers in the group disagree) / 'unknown' (not checked yet).
 const STATE_INFO: Record<string, { label: string; tone: 'ok' | 'bad' | 'warn' | 'pending' }> = {
   running: { label: 'Running', tone: 'ok' },
-  stopped: { label: 'Stopped', tone: 'bad' },
+  stopped: { label: 'Stopped', tone: 'pending' },
   failed: { label: 'Failed', tone: 'bad' },
   credential_expired: { label: 'Failed (due to expired password)', tone: 'bad' },
   datasource_down: { label: 'Failed (database connection)', tone: 'bad' },
+  not_ready: { label: "Failed (can't receive traffic)", tone: 'bad' },
   unreachable: { label: 'Unreachable', tone: 'bad' },
   starting: { label: 'Starting', tone: 'warn' },
   stopping: { label: 'Stopping', tone: 'warn' },

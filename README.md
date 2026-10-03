@@ -79,14 +79,15 @@ works; see `.env.example`). Real environment variables win over the file.
 |---|---|---|
 | `PORT` | `4000` | Port the API (and, in production, the UI) listens on. |
 | `HOST` | `127.0.0.1` | Interface to bind to. Change to a LAN IP if you need to reach it from another machine. |
-| `HEARTBEAT_INTERVAL_CRON` | `*/5 * * * *` | Cron expression for the background status check (the "heartbeat") — every 5 minutes by default. The "every N minutes" text on the server page follows it when it's in the `*/N * * * *` form. |
+| `HEARTBEAT_INTERVAL_CRON` | `*/30 * * * *` | Cron expression for the background status check (the "heartbeat") — every 30 minutes by default. The "every N minutes" text on the server page follows it when it's in the `*/N * * * *` form. |
 | `START_ATTEMPTS` | `3` | Start / Restart All: how many times to try a component that crashes on start before pausing to ask you. |
 | `START_RETRY_DELAY_S` | `5` | Seconds to wait between those attempts. |
 | `PORT_RELEASE_WAIT_S` | `30` | A start that fails because a port is already in use waits this long for the port to be released (a previous instance may still be shutting down) before it gives up and names who holds it. |
 | `START_HINT_AFTER_S` | `30` | A unit that is running but hasn't printed its success line after this long gets the **Mark as started** button. |
 | `START_PARALLEL` | `4` | Start / Restart All: how many components that no condition mentions are started at the same time. Each one keeps a log tail open over SSH, and Healthcheck never uses more than 8 SSH channels per server at once, which fits sshd's default `MaxSessions 10`. |
 | `START_STAGGER_S` | `6` | Even within that limit, this many seconds are put between the *launch* of each parallel component, so their processes don't all hit the database (or anything else shared) in the same instant. A component that finishes early frees its slot immediately - the stagger only spaces out the start, not the whole run. |
-| `WILDFLY_CLI_PATH` | `/Data/software/bin/wildfly-26.1.3.Final/bin/jboss-cli.sh` | Where `jboss-cli.sh` is on the servers, for WildFly's datasource check (see *WildFly's database connections*). The same path is used on every server. |
+| `WILDFLY_CLI_PATH` | `/Data/software/bin/wildfly-26.1.3.Final/bin/jboss-cli.sh` | Where `jboss-cli.sh` is on the servers, for WildFly's datasource and traffic checks (see *WildFly's database connections and traffic*). The same path is used on every server. |
+| `WILDFLY_READY_TIMEOUT_S` | `60` | After WildFly starts, how long to keep checking whether it can receive traffic before counting it as a failure. |
 | `HEALTHCHECK_DATA_DIR` | `server/data` | Where the SQLite database, the generated SSH keypair, and `master.key` live. Change this if you want the data directory somewhere other than inside the repo. |
 | `HEALTHCHECK_PASSWORD` | *(none — auth currently disabled)* | Reserved for re-enabling the basic-auth gate in `server/src/middleware/auth.ts` if you ever expose this beyond localhost. |
 
@@ -111,10 +112,10 @@ server only.
 The server page is written so that someone who isn't technical can read it:
 
 - **A headline box at the top** says in one sentence whether the platform on that server works ("Everything
-  is working", or "12 of 20 services need attention"), when it was last checked, and has a **Check now**
+  is working", or "11 of 20 services have a problem", or "2 of 20 services are stopped"), when it was last checked, and has a **Check now**
   link. **Start All / Restart All / Stop All** sit right under it.
 - **Below, services are grouped by what's wrong**, problems first, each group with a plain heading and one
-  sentence on what to do: *Can't reach the database*, *Database password expired*, *Stopped with an error*,
+  sentence on what to do: *Can't reach the database*, *Can't receive traffic*, *Database password expired*, *Stopped with an error*,
   *Couldn't be checked*, *Stopped*, *In progress*, then *Working normally* and *Not checked yet*.
 - **Each service row** has one button for the obvious next step (**Start** when it's down, **Restart** for
   WildFly's database problem). Everything else (Start, Restart, Stop, **Show its log**, **Remove from this
@@ -124,9 +125,10 @@ The server page is written so that someone who isn't technical can read it:
 - **Find installed software** and **Stop watching this server** are at the bottom too. Stopping watching makes
   Healthcheck stop managing the server; nothing on the machine itself is changed or stopped.
 
-Colours: the whole UI uses red, white and gray only. Gray is normal; red is used for actions and for
-anything that needs attention, so a page without red on it has nothing wrong. Working services show a
-charcoal check mark, problems a red "!".
+Colours: the UI is red, white and gray, plus one status colour. **Working** is green (a green check
+mark), **has a problem** is red (a red "!"), **stopped** is gray (a gray square: nothing is broken, it just
+isn't running, so it isn't listed under *Needs attention* and the headline doesn't count it as a problem).
+Otherwise red is only used for action buttons.
 
 ### Adding a server
 
@@ -307,12 +309,15 @@ is held back).
   the one line that says why before this ever got a chance to look at it (which is why the same expired
   password could show up correctly for one component and as a bare "Failed" for another, in the same run).
 
-#### WildFly's database connections
+#### WildFly's database connections and traffic
 
 WildFly can be "running" to systemd, and even log its own "started" line, while the connection pools to
-its databases don't work (an expired database password, a locked account, a database that's down). So for
-WildFly (any catalog entry whose name or unit mentions WildFly/JBoss) Healthcheck also tests every
-datasource it has, over the same SSH connection:
+its databases don't work (an expired database password, a locked account, a database that's down), or
+while it isn't accepting requests. So for WildFly (any catalog entry whose name or unit mentions
+WildFly/JBoss) Healthcheck runs two more checks in order, over the same SSH connection:
+**first its database connections, then — only if those are all fine — whether it can receive traffic.**
+
+**Database connections.** Healthcheck tests every datasource WildFly has:
 
 1. It asks WildFly which datasources it has, so nothing has to be configured per market:
    `jboss-cli.sh --connect command='ls /subsystem=datasources/data-source'` (and `xa-data-source`).
@@ -324,15 +329,43 @@ datasource it has, over the same SSH connection:
 user is needed. If the listing itself can't run, the check is skipped and the step says why. It never
 blocks a start because the check tool was unavailable.
 
-When this runs, and what happens if **even one** datasource fails:
+**Receiving traffic.** Nothing about a market's hostname or domain is configured or hard-coded: Healthcheck
+asks WildFly which address and port each of its listeners is actually bound to
+(`/socket-binding-group=*/socket-binding=*:read-resource(include-runtime=true)`), and sends the requests
+with `curl` on the server itself:
+
+1. **Ready?** `GET http://<management-http address>/health/ready` (WildFly's own readiness check).
+   HTTP 200 means ready. HTTP 503 means WildFly says it isn't ready. The reply is read in both shapes
+   (WildFly's own health subsystem and MicroProfile Health), so the reason names the application that
+   failed to deploy, the parts of it that didn't come up, and the root cause (shown under technical
+   details). If that URL needs a login, isn't enabled (401/403/404) or doesn't answer,
+   it's noted and only step 2 decides.
+2. **Answers requests?** `GET` on the web listener (the `http` binding, else `https`). Any HTTP answer,
+   even a 404, proves it accepts and serves requests; no answer at all means it can't take traffic.
+
+After a start, readiness can lag the "started" log line by a few seconds while deployments finish, so this
+is retried every 5 s for up to `WILDFLY_READY_TIMEOUT_S` (60 s) before it counts as a failure. If the
+addresses can't be read, or `curl` isn't on the server, the check is skipped and the step says so.
+
+When these run, and what happens if **even one** datasource fails or WildFly can't take traffic:
 
 | When | What happens |
 |---|---|
 | **Start / Restart** of WildFly, after its log says it started | WildFly is **stopped immediately** and the step fails. |
-| **Start All** or **Start** while WildFly is **already running** | Tested anyway (systemd "running" isn't enough); same as above. |
-| **Check now** and the 5-minute **heartbeat** | WildFly is **flagged, not stopped** (stopping a production server in the background, perhaps over a short database blip, is left to a person). |
+| **Start All** or **Start** while WildFly is **already running** | Checked anyway (systemd "running" isn't enough); same as above. |
+| **Check now** and the 30-minute **heartbeat** | WildFly is **flagged, not stopped** (stopping a production server in the background, perhaps over a short database blip, is left to a person). Here both checks always run, so the traffic check still runs when a datasource has already failed. When the heartbeat finds a problem, a red **"WildFly has issues, please check"** warning pops up on whatever page of the tool is open (see below). |
 
-In a Start / Restart All run the popup then reads **Database connection problem**, names the failing
+When all is well, the step's log says so, e.g. "All 13 datasources passed a connection test. Ready to
+receive traffic: WildFly says it's ready (/health/ready on 10.0.0.5:9990); it answers web requests on
+10.0.0.5:8080."
+
+If it **can't take traffic**, the popup reads **Can't receive traffic** with the reason, its status becomes
+**Failed (can't receive traffic)**, and it's listed under that heading on the server page with a
+**Restart** button.
+
+If a **datasource** fails:
+
+in a Start / Restart All run the popup reads **Database connection problem**, names the failing
 datasources, gives the likely cause in plain words, and keeps the raw `WFLYJCA…`/`ORA-…` text under
 **Show technical details**. If the failure text is an expired password, Retry is hidden, as for any
 other expired password. WildFly's status becomes **Failed (database connection)**, and its row on the
@@ -481,6 +514,7 @@ listed under; the dashboard's chips use the shorter status names:
 |---|---|---|
 | **Working normally** | **Running** | systemd reports the unit `active` (and, for WildFly, every datasource connects) |
 | **Can't reach the database** | **Failed (database connection)** | WildFly is running, but one or more of its datasources fail `test-connection-in-pool` |
+| **Can't receive traffic** | **Failed (can't receive traffic)** | WildFly is running and its datasources connect, but it says it isn't ready, or its web listener doesn't answer |
 | **Database password expired** | **Failed (due to expired password)** | it stopped because its database password expired |
 | **Stopped with an error** | **Failed** | systemd reports `failed`, or the last start didn't become healthy |
 | **Stopped** | **Stopped** | installed, not running |
@@ -489,16 +523,24 @@ listed under; the dashboard's chips use the shorter status names:
 | **Couldn't be checked** | **Unreachable** | the server couldn't be reached over SSH |
 | **Not checked yet** | **Not checked yet** | no status recorded yet |
 
-A background **heartbeat** re-checks every component on every server every **5 minutes** (see
+A background **heartbeat** re-checks every component on every server every **30 minutes** (see
 `HEARTBEAT_INTERVAL_CRON`), and once shortly after the app starts. The line above the table shows the
 interval and when the last check ran. Status is also refreshed immediately by **Check now**, by any
 Start/Restart/Stop job (step by step while it runs), and right after a server is added or software is
 discovered. The page re-reads statuses every 15 seconds, so a new beat appears on its own — no reload.
 If a server is unreachable it's tried once per beat (not once per component), so a down host can't
 stall the check. Status history is kept for 3 days. For a running WildFly each beat also runs the
-datasource check (see *WildFly's database connections*), which adds about 1.3 s per datasource; a failure is
-flagged, never acted on. A component parked as *Failed (due to expired password)* or *Failed (database
+datasource and traffic checks (see *WildFly's database connections and traffic*), which add about 1.3 s per datasource plus a few seconds; a failure is
+flagged, never acted on. A component parked as *Failed (due to expired password)*, *Failed (can't receive traffic)* or *Failed (database
 connection)* keeps that status while it stays down, instead of turning into a bare "Stopped" at the next beat.
+
+**The heartbeat's warning.** When a beat finds a running WildFly that can't receive traffic, or whose
+datasources can't connect, a red **"WildFly has issues, please check"** popup appears on top of any page of
+the tool. It names the server, says what's wrong in plain words (failing databases as chips), and offers
+**Open <server>** or **Dismiss**. Nothing is stopped or restarted. A dismissed warning comes back at the next
+beat if the problem is still there. The page asks `GET /api/alerts` every 30 seconds for what the latest beat
+found. Problems found by a Start/Restart run don't use this popup, because the run already asks you in its own.
+The warning only shows while the tool is open in a browser; it doesn't send email or chat messages.
 
 ### Logs
 

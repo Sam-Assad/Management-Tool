@@ -23,7 +23,9 @@ import {
   checkWildFlyDatasources,
   friendlyDsReason,
   datasourceDownDetail,
-} from '../scan/datasources.js';
+  checkWildFlyTraffic,
+  notReadyDetail,
+} from '../scan/wildfly.js';
 import type { SoftwareDefinition, Server as ServerRow } from '@healthcheck/shared';
 
 function nowIso() {
@@ -66,6 +68,9 @@ function finishJob(jobId: number, status: 'succeeded' | 'failed', errorMessage?:
   });
   credentialFailures.forEach((key) => {
     if (key.startsWith(`${jobId}:`)) credentialFailures.delete(key);
+  });
+  trafficFailures.forEach((_v, key) => {
+    if (key.startsWith(`${jobId}:`)) trafficFailures.delete(key);
   });
   datasourceFailures.forEach((_v, key) => {
     if (key.startsWith(`${jobId}:`)) datasourceFailures.delete(key);
@@ -132,6 +137,9 @@ const credentialFailures = new Set<string>();
 // A component whose post-start datasource check failed: which datasource(s) and a plain-English reason,
 // so the question the operator is asked can name them directly instead of just saying "did not start".
 const datasourceFailures = new Map<string, { names: string[]; reason: string }>();
+
+// WildFly whose datasources connect but that can't receive traffic: why, in plain words.
+const trafficFailures = new Map<string, string>();
 
 // Live control of a running job. Ending a run (stop / roll back) has to reach starts that are already
 // under way: cancel every health wait at once, and make anything about to start check first.
@@ -710,15 +718,44 @@ async function startAttempts(
     updateStep(jobId, step.id, { status: 'skipped', log_excerpt: why, finished_at: nowIso() });
     return true;
   };
-  // WildFly only: test every datasource it has. Any failure = not healthy, whatever systemd and the log
-  // say - stop it right away (before systemd's Restart= brings it back against the same broken database),
-  // record which datasources, and fail the step so the run asks the operator.
-  const datasourceGate = async (client: any, startedNow: boolean): Promise<{ ok: boolean; note: string }> => {
+  // WildFly only: 1) every datasource it has must connect, 2) then it must be able to receive traffic.
+  // Either failing = not healthy, whatever systemd and the log say - stop it right away (before systemd's
+  // Restart= brings it back against the same broken database), record why, and fail the step so the run
+  // asks the operator. A check that can't run at all (CLI or curl unavailable) is noted, never a failure.
+  const wildflyGate = async (client: any, startedNow: boolean): Promise<{ ok: boolean; note: string; ended?: boolean }> => {
     if (!isWildFly(def)) return { ok: true, note: '' };
+    const was = startedNow ? 'started' : 'was running';
     updateStep(jobId, step.id, { log_excerpt: `${def.name} is up - testing its database connections (datasources)...` });
     const ds = await checkWildFlyDatasources(client);
-    if (!ds.checked) return { ok: true, note: `\n\nDatasource check skipped: ${ds.note}` };
-    if (ds.failures.length === 0) return { ok: true, note: `\n\nAll ${ds.tested.length} datasources passed a connection test.` };
+    if (ds.failures.length === 0) {
+      const dsNote = ds.checked ? `All ${ds.tested.length} datasources passed a connection test.` : `Datasource check skipped: ${ds.note}`;
+      updateStep(jobId, step.id, { log_excerpt: `${dsNote}\n\nChecking that ${def.name} can receive traffic...` });
+      // Readiness can trail the "started" log line by a few seconds while deployments finish: keep asking.
+      const deadline = Date.now() + env.wildflyReadyTimeoutS * 1000;
+      let traffic = await checkWildFlyTraffic(client);
+      while (traffic.checked && !traffic.ok && Date.now() < deadline && !runEnding(jobId)) {
+        updateStep(jobId, step.id, {
+          log_excerpt: `${dsNote}\n\nNot ready for traffic yet - checking again (gives up after ${env.wildflyReadyTimeoutS}s):\n${traffic.problems.join('\n')}`,
+        });
+        await sleepUnlessEnded(jobId, 5000);
+        if (!runEnding(jobId)) traffic = await checkWildFlyTraffic(client);
+      }
+      if (runEnding(jobId)) return { ok: false, note: '', ended: true };
+      if (!traffic.checked) return { ok: true, note: `\n\n${dsNote}\n${traffic.note}` };
+      if (traffic.ok) return { ok: true, note: `\n\n${dsNote}\n${traffic.summary}${traffic.note ? `\n${traffic.note}` : ''}` };
+      await stopQuietly(client, def);
+      trafficFailures.set(conflictKey, traffic.problems.join(' '));
+      updateStep(jobId, step.id, {
+        status: 'failed',
+        log_excerpt:
+          `${def.name} ${was} and its datasources connect, but it can't receive traffic, so ${def.name} was stopped.\n\n` +
+          `${traffic.problems.join('\n')}${traffic.note ? `\n${traffic.note}` : ''}\n\n${dsNote}` +
+          `${traffic.technical ? `\n\n${traffic.technical}` : ''}`,
+        finished_at: nowIso(),
+      });
+      recordStatus(server.id, def.id, 'scan', 'down', notReadyDetail(traffic.problems));
+      return { ok: false, note: '' };
+    }
     await stopQuietly(client, def);
     const names = ds.failures.map((f) => f.name);
     const failureText = ds.failures.map((f) => `${f.name}: ${f.reason}`).join('\n');
@@ -728,7 +765,7 @@ async function startAttempts(
     updateStep(jobId, step.id, {
       status: 'failed',
       log_excerpt:
-        `${def.name} ${startedNow ? 'started' : 'was running'}, but ${names.length} of ${ds.tested.length} datasources failed a connection test, ` +
+        `${def.name} ${was}, but ${names.length} of ${ds.tested.length} datasources failed a connection test, ` +
         `so ${def.name} was stopped: ${names.join(', ')}.\n\nLikely cause: ${cause}.\n\nTechnical detail:\n${failureText}`,
       finished_at: nowIso(),
     });
@@ -738,13 +775,15 @@ async function startAttempts(
   // a Retry starts from a clean slate: a new failure says for itself what kind it is
   credentialFailures.delete(conflictKey);
   datasourceFailures.delete(conflictKey);
+  trafficFailures.delete(conflictKey);
   try {
     const client = await getConnection(server as any);
     if (skipMissing && (await notInstalledHere(client, def))) return skipStep('not installed on this server - skipped');
     if (mode === 'start' && (await detectPresence(client, def))) {
-      // "Running" in systemd isn't enough for WildFly: a running WildFly with a broken datasource is
-      // exactly what this check exists to catch.
-      const gate = await datasourceGate(client, false);
+      // "Running" in systemd isn't enough for WildFly: a running WildFly with a broken datasource, or one
+      // that can't take traffic, is exactly what this check exists to catch.
+      const gate = await wildflyGate(client, false);
+      if (gate.ended) return skipStep(endedText(jobId));
       if (!gate.ok) return false;
       updateStep(jobId, step.id, { status: 'healthy', log_excerpt: `already running - left untouched${gate.note}`, finished_at: nowIso() });
       recordStatus(server.id, def.id, 'scan', 'up', 'running');
@@ -784,11 +823,13 @@ async function startAttempts(
       last = await watch.result;
       endWatch(jobId, step.id);
       if (last.healthy) {
-        const gate = await datasourceGate(client, true);
+        const gate = await wildflyGate(client, true);
+        if (gate.ended) return skipStep(endedText(jobId));
         if (!gate.ok) return false;
         portConflicts.delete(conflictKey);
         credentialFailures.delete(conflictKey);
         datasourceFailures.delete(conflictKey);
+        trafficFailures.delete(conflictKey);
         updateStep(jobId, step.id, { status: 'healthy', log_excerpt: `${last.excerpt}${gate.note}`, finished_at: nowIso() });
         recordStatus(server.id, def.id, 'scan', 'up', 'running');
         return true;
@@ -889,6 +930,8 @@ interface Question {
   // set when WildFly failed its datasource check: which datasources, and the cause in plain words
   datasources?: string[];
   cause?: string;
+  // set when WildFly's datasources connect but it can't receive traffic: why
+  notReady?: string;
 }
 
 function askOperator(jobId: number, question: Question): Promise<Decision> {
@@ -935,6 +978,8 @@ function transitiveDependents(from: number, dependents: Map<number, number[]>, w
 
 // Final message of a single-component Start/Restart that failed (no question is asked for those).
 function singleFailureMessage(jobId: number, server: ServerRow, def: SoftwareDefinition): string {
+  const traffic = trafficFailures.get(pendingKey(jobId, server.id, def.id));
+  if (traffic) return `${def.name} has been stopped: its databases connect, but it can't receive traffic. ${traffic}`;
   const ds = datasourceFailures.get(pendingKey(jobId, server.id, def.id));
   if (!ds) return `${def.name} failed to become healthy`;
   return `${def.name} has been stopped: ${ds.names.length === 1 ? 'one of its datasources' : `${ds.names.length} of its datasources`} can't connect - ${ds.reason}. Failed: ${ds.names.join(', ')}.`;
@@ -1112,6 +1157,7 @@ async function runGroupSequence(
     while (!ok) {
       const limited = credentialFailures.has(pendingKey(jobId, server.id, def.id));
       const dsFailure = datasourceFailures.get(pendingKey(jobId, server.id, def.id));
+      const notReady = trafficFailures.get(pendingKey(jobId, server.id, def.id));
       const holdsBack = transitiveDependents(def.id, dependents, inRun)
         .map((id) => nameOf.get(id))
         .filter((n): n is string => Boolean(n));
@@ -1124,6 +1170,8 @@ async function runGroupSequence(
         summary = `${def.name}${onServer}'s password or credentials look expired - retrying was skipped, it would fail the same way.`;
       } else if (dsFailure) {
         summary = `${def.name}${onServer} has been stopped: ${failedCount} can't connect - ${dsFailure.reason}. The applications using them won't work until this is fixed.`;
+      } else if (notReady) {
+        summary = `${def.name}${onServer} has been stopped: its databases connect, but it can't receive traffic, so users couldn't reach the applications on it. ${notReady}`;
       } else {
         summary = `${def.name}${onServer} ${VERB_TEXT[verb].didNot}${verb !== 'stop' && env.startAttempts > 1 ? ` (after up to ${env.startAttempts} attempts)` : ''}.`;
       }
@@ -1132,13 +1180,14 @@ async function runGroupSequence(
         server: server.name,
         verb,
         summary,
-        detail: dsFailure ? lastStepExcerpt(jobId, server.id, def.id) : lastStepReason(jobId, server.id, def.id),
+        detail: dsFailure || notReady ? lastStepExcerpt(jobId, server.id, def.id) : lastStepReason(jobId, server.id, def.id),
         holdsBack,
         rollback: rollbackNames(def),
         portFix: describeFixFor(jobId, server.id, def.id),
         limited,
         datasources: dsFailure?.names,
         cause: dsFailure?.reason,
+        notReady,
       });
       if (choice === 'retry') {
         ok = await stepFn(jobId, server, def, true, env.startAttempts);
@@ -1467,15 +1516,17 @@ export async function runScan(groupId: number) {
           updateStep(job.id, step.id, { status: 'running', started_at: nowIso() });
           try {
             const client = await getConnection(server as any);
-            const { up: present, state, detail, datasources } = await checkComponent(client, def);
+            const { up: present, state, detail, datasources, notReady } = await checkComponent(client, def);
             recordStatus(server.id, def.id, 'scan', present ? 'up' : 'down', detail);
             const failureText = (datasources ?? []).map((f) => `${f.name}: ${f.reason}`).join('\n');
             updateStep(job.id, step.id, {
               status: present ? 'healthy' : 'failed',
-              log_excerpt: datasources?.length
-                ? `running, but ${datasources.length} datasource${datasources.length > 1 ? 's' : ''} can't connect - ${friendlyDsReason(failureText)}: ` +
-                  `${datasources.map((f) => f.name).join(', ')}\n\n${failureText}`
-                : state.replace('_', ' '),
+              log_excerpt: notReady?.length
+                ? `running, but can't receive traffic: ${notReady.join(' ')}${failureText ? `\n\n${failureText}` : ''}`
+                : datasources?.length
+                  ? `running, but ${datasources.length} datasource${datasources.length > 1 ? 's' : ''} can't connect - ${friendlyDsReason(failureText)}: ` +
+                    `${datasources.map((f) => f.name).join(', ')}\n\n${failureText}`
+                  : state.replace('_', ' '),
               finished_at: nowIso(),
             });
           } catch (err: any) {
