@@ -66,6 +66,10 @@ npm run build                # builds shared -> server -> web
 npm start                    # serves the built UI + API from a single Node process on $PORT
 ```
 
+> **Use `npm start` for real work, not `npm run dev`.** Dev mode restarts the server every time a source
+> file is saved. A restart marks any running Start / Restart / Stop All job as *Interrupted* (nothing is
+> stopped, but the run and any question it was asking are gone, and you have to start it again).
+
 ### Environment variables (optional)
 
 Set these as real environment variables, or in a `.env` file in the project root (a `server/.env` also
@@ -82,6 +86,7 @@ works; see `.env.example`). Real environment variables win over the file.
 | `START_HINT_AFTER_S` | `30` | A unit that is running but hasn't printed its success line after this long gets the **Mark as started** button. |
 | `START_PARALLEL` | `4` | Start / Restart All: how many components that no condition mentions are started at the same time. Each one keeps a log tail open over SSH, and Healthcheck never uses more than 8 SSH channels per server at once, which fits sshd's default `MaxSessions 10`. |
 | `START_STAGGER_S` | `6` | Even within that limit, this many seconds are put between the *launch* of each parallel component, so their processes don't all hit the database (or anything else shared) in the same instant. A component that finishes early frees its slot immediately - the stagger only spaces out the start, not the whole run. |
+| `WILDFLY_CLI_PATH` | `/Data/software/bin/wildfly-26.1.3.Final/bin/jboss-cli.sh` | Where `jboss-cli.sh` is on the servers, for WildFly's datasource check (see *WildFly's database connections*). The same path is used on every server. |
 | `HEALTHCHECK_DATA_DIR` | `server/data` | Where the SQLite database, the generated SSH keypair, and `master.key` live. Change this if you want the data directory somewhere other than inside the repo. |
 | `HEALTHCHECK_PASSWORD` | *(none — auth currently disabled)* | Reserved for re-enabling the basic-auth gate in `server/src/middleware/auth.ts` if you ever expose this beyond localhost. |
 
@@ -101,8 +106,27 @@ installed component. The white bar at the top of every page finds a server by na
 shows how many components are running overall; the sidebar's **Add server** button works from any page.
 Open a server to control it: everything on its page —
 Start All / Restart All / Stop All, the per-component buttons, statuses, logs — applies to that one
-server only. **Remove server** (top right of its page) makes Healthcheck stop managing it; nothing on the
-machine itself is changed or stopped.
+server only.
+
+The server page is written so that someone who isn't technical can read it:
+
+- **A headline box at the top** says in one sentence whether the platform on that server works ("Everything
+  is working", or "12 of 20 services need attention"), when it was last checked, and has a **Check now**
+  link. **Start All / Restart All / Stop All** sit right under it.
+- **Below, services are grouped by what's wrong**, problems first, each group with a plain heading and one
+  sentence on what to do: *Can't reach the database*, *Database password expired*, *Stopped with an error*,
+  *Couldn't be checked*, *Stopped*, *In progress*, then *Working normally* and *Not checked yet*.
+- **Each service row** has one button for the obvious next step (**Start** when it's down, **Restart** for
+  WildFly's database problem). Everything else (Start, Restart, Stop, **Show its log**, **Remove from this
+  list**) is under the **⋯** menu on the row.
+- **Show technical details** (bottom of the page) adds the SSH user/host/port, each service's start and stop
+  step, and its raw state. The switch is remembered in that browser.
+- **Find installed software** and **Stop watching this server** are at the bottom too. Stopping watching makes
+  Healthcheck stop managing the server; nothing on the machine itself is changed or stopped.
+
+Colours: the whole UI uses red, white and gray only. Gray is normal; red is used for actions and for
+anything that needs attention, so a page without red on it has nothing wrong. Working services show a
+charcoal check mark, problems a red "!".
 
 ### Adding a server
 
@@ -243,9 +267,9 @@ is held back).
   `PORT_RELEASE_WAIT_S` seconds for the port to be released — a previous instance that is still shutting
   down is the usual cause, and it then tries again even if that was the last attempt, (3) if the port stays
   taken, looks on the server (`ss -ltnp`) for **who holds it** and puts that in the failure text and the
-  question box: process, pid, user, how long it has been up, whether it belongs to a systemd service or
+  popup: process, pid, user, how long it has been up, whether it belongs to a systemd service or
   was started by hand from a terminal, and its command line (passwords and tokens in it are masked).
-  When the holder can be dealt with, the question box gets a **Free port(s) … and retry** button: it stops
+  When the holder can be dealt with, the popup gets a **Free port(s) … and retry** button: it stops
   the holding systemd service with `systemctl stop`, or signals a stray process (`kill`, then `kill -9` after
   10 s), waits for the port to be released and starts the component again. It is offered only for
   processes the service user is allowed to stop — its own, or a systemd service (via the same NOPASSWD
@@ -263,8 +287,8 @@ is held back).
   is **not** treated as fatal on sight: the health check keeps waiting normally, and only if the unit
   actually goes down (or the health timeout passes) does the same expired-credential check run again to
   explain why. This avoids the false alarm of giving up on a component that was in fact still going to
-  come up healthy. Either way, once it is treated as a genuine expired-credential failure, the question
-  box offers only **Continue without it** and **Roll back** (stops everything the run has started so
+  come up healthy. Either way, once it is treated as a genuine expired-credential failure, the popup
+  offers only **Continue without it** and **Roll back** (stops everything the run has started so
   far) — Retry and Stop the run are hidden, since neither helps here. Continue skips it and carries on
   with the rest (holding back only what depends on it through a condition). **One shared password behind
   several components** (a common Oracle account, for example) usually expires for all of them at once —
@@ -274,7 +298,7 @@ is held back).
   answers — otherwise `Restart=` just keeps bouncing it against the database, hitting it with the same
   bad password every few seconds, for as long as the run's SSH connection stays open.
 
-  Its Status column reads **"Failed (due to expired password)"**, and stays that way — a scheduled
+  Its status reads **"Failed (due to expired password)"**, and stays that way — a scheduled
   heartbeat re-check on a component parked in this state does not overwrite it with a plain "Stopped" (it
   genuinely is stopped, that reading isn't wrong, just less useful than the reason already known); it only
   updates once the component comes back up for real, or a fresh Start/Restart records its own new outcome.
@@ -283,12 +307,44 @@ is held back).
   the one line that says why before this ever got a chance to look at it (which is why the same expired
   password could show up correctly for one component and as a bare "Failed" for another, in the same run).
 
+#### WildFly's database connections
+
+WildFly can be "running" to systemd, and even log its own "started" line, while the connection pools to
+its databases don't work (an expired database password, a locked account, a database that's down). So for
+WildFly (any catalog entry whose name or unit mentions WildFly/JBoss) Healthcheck also tests every
+datasource it has, over the same SSH connection:
+
+1. It asks WildFly which datasources it has, so nothing has to be configured per market:
+   `jboss-cli.sh --connect command='ls /subsystem=datasources/data-source'` (and `xa-data-source`).
+   The loyalty, sales and usage servers each get their own datasources tested.
+2. It runs `test-connection-in-pool` on each one, which borrows a real connection right now.
+   Roughly 1.3 s per datasource, so about 18 s for 13 of them.
+
+`jboss-cli.sh` is found at `WILDFLY_CLI_PATH`; it runs locally on the server, so no WildFly management
+user is needed. If the listing itself can't run, the check is skipped and the step says why. It never
+blocks a start because the check tool was unavailable.
+
+When this runs, and what happens if **even one** datasource fails:
+
+| When | What happens |
+|---|---|
+| **Start / Restart** of WildFly, after its log says it started | WildFly is **stopped immediately** and the step fails. |
+| **Start All** or **Start** while WildFly is **already running** | Tested anyway (systemd "running" isn't enough); same as above. |
+| **Check now** and the 5-minute **heartbeat** | WildFly is **flagged, not stopped** (stopping a production server in the background, perhaps over a short database blip, is left to a person). |
+
+In a Start / Restart All run the popup then reads **Database connection problem**, names the failing
+datasources, gives the likely cause in plain words, and keeps the raw `WFLYJCA…`/`ORA-…` text under
+**Show technical details**. If the failure text is an expired password, Retry is hidden, as for any
+other expired password. WildFly's status becomes **Failed (database connection)**, and its row on the
+server page lists the failing datasources (the **×** hides that list; it comes back if a different set
+starts failing).
+
 ### Start & stop order — Conditions
 
 Each server has a **start order** and a **stop order**. Neither is edited by hand: both are worked out
 from the rules on the **Conditions** page (sidebar → Configure → Conditions), and every server updates
-as soon as a rule changes. The server's table shows both: **Start #** (the order Start / Restart All go
-in) and **Stop #** (the order Stop All goes in).
+as soon as a rule changes. Turn on **Show technical details** on a server page to see each service's
+start step (the order Start / Restart All go in) and stop step (the order Stop All goes in).
 
 There are two types of condition, and each one only affects its own order:
 
@@ -338,14 +394,16 @@ How the orders are worked out:
 - **A component that keeps crashing is retried, then the run asks you.** In Start / Restart All, if a
   component crashes on start (e.g. goal-backend exits because its database password expired), Healthcheck
   stops it, waits `START_RETRY_DELAY_S` seconds and tries again, up to `START_ATTEMPTS` attempts in total
-  (default 3). If it still won't come up, the run **pauses** and the job panel asks what to do (if several
-  components fail together, you're asked about one at a time):
+  (default 3). If it still won't come up, the run **pauses** and a **popup** asks what to do (if several
+  components fail together, you're asked about one at a time). The popup has a big icon and a plain title
+  (*Database connection problem*, *Password expired*, *Port already in use*, *… didn't start*), one sentence
+  on what happened, the technical text under **Show technical details**, and these buttons:
   - **Free port(s) … and retry** — only when the failure is a port already in use; see *Port already in use*.
-  - **Retry** — try it again (e.g. after you fixed the password); you'll be asked again if it fails again.
-  - **Skip *component* and continue** — leave it stopped and carry on with the rest. Only what depends on
-    it through a condition is held back (the box lists them; if nothing depends on it, nothing is).
-  - **Stop the run here** — start nothing further so you can look into it; the rest is left as it was.
-    **Stop the run here and Roll back take effect immediately**: components that were still coming up are
+  - **Try again** — try it again (e.g. after you fixed the password); you'll be asked again if it fails again.
+  - **Continue without *component*** — leave it stopped and carry on with the rest. Only what depends on
+    it through a condition is held back (the popup lists them; if nothing depends on it, nothing is).
+  - **Stop the run** — start nothing further so you can look into it; the rest is left as it was.
+    **Stop the run and Roll back take effect immediately**: components that were still coming up are
     no longer waited for (they show "Cancelled" / "Not waited for"), queued ones are dropped, and no retry
     or new start is issued. A rollback then stops what was started, including those in-flight ones.
   - **Roll back** (Start / Restart All only) — undo the run: stop **what this run has started so far**
@@ -353,6 +411,8 @@ How the orders are worked out:
     were already running before the run began are not touched. The job ends as *Rolled back*, and its message
     lists what was stopped. Hover the (i) next to the button to see exactly which components it will stop.
 
+  **Look at the run first** tucks the popup away so you can read the job's steps and logs; an **Open the
+  decision** button in the job panel brings it back, and a new question always pops up again.
   If nobody answers within 30 minutes the run stops by itself, so the server is never locked forever.
   A failed component is left **stopped** (so it isn't crash-looping against the database in the
   background). The same question is asked in Stop All ("leave it running and continue"). Reloading the
@@ -376,69 +436,73 @@ How the orders are worked out:
     while Artemis is down.
   - A component that isn't running has nothing to protect, so stopping it again (or starting one whose
     dependents are running) is simply allowed. Restart All / Stop All follow the conditions themselves.
-  The message appears in a red box under the action buttons.
+  The message appears in a red box under Start All / Restart All / Stop All.
 - **One job at a time per server.** While a job is running — or paused waiting for your answer — the Start /
-  Restart / Stop / Check status buttons are greyed out, and the server refuses another one, so two runs can
+  Restart / Stop buttons and **Check now** are disabled, and the server refuses another one, so two runs can
   never fight over the same components.
-- **Restart / Stop / Start** on a single row does the same for just that item.
+- **Start / Restart / Stop** on a single row (its button, or its **⋯** menu) does the same for just that item.
   Note: systemd stops anything that `Requires=` the unit you stop (e.g. stopping a
   rules selector also stops `rule-interpreter`). After a single **Restart**,
   Healthcheck starts back up whatever was running before and got taken down that way,
   as extra steps in the same job. A single **Stop** does not — it stops what you asked
   for, plus whatever systemd takes down with it.
-- **Check status** — read-only: looks at the components on the server and reports
-  which are running (up) and which are stopped (down).
-- **Discover software** — looks for catalog components that are installed on the server
+- **Check now** (in the headline box) — read-only: looks at every component on the server and reports
+  which are running and which are not. Changes nothing.
+- **Find installed software** — looks for catalog components that are installed on the server
   but not in its list yet, and adds them (running or stopped). There is no way to add a
   component that isn't installed — a server lists installed components only.
 - Any software found installed later (via the periodic background check) that
-  isn't in the server's list yet shows up as a dismissible suggestion on its
-  page, with one-click **Add** — it's never added automatically without your
-  say.
+  isn't in the server's list yet shows up under **Found on this server but not watched yet**, with
+  **Watch it** and **Ignore** — it's never added automatically without your say.
 
-All of the above run as a tracked **job**. Its result appears in a compact panel right under the
-action buttons (no scrolling): a summary bar with the outcome, what ran, how long it took and
+All of the above run as a tracked **job**. Its result appears in a compact panel right under
+Start All / Restart All / Stop All (no scrolling): a summary bar with the outcome, what ran, how long it took and
 counts (e.g. "9 ok · 5 running · 4 waiting · 1 failed"), then one line per component, updating live. A
 component that is starting shows the latest lines of its log; a failed one shows its error or log excerpt
 inline.
 
-**Every button on the server page has a small (i) next to it** — hover it (or tap it) to read what the
-button does. The row buttons (Start / Restart / Stop / Logs / Remove) are explained by the (i) in the
-**Actions** column header; **Start #** and **Stop #** have one too.
+**The main buttons on the server page have a small (i) next to them** — hover it (or tap it) to read what
+the button does.
 
 - **Hide details / Show details** folds the panel down to just the summary bar. A run that finishes
   with nothing wrong folds itself down automatically; a failure stays open.
 - **Only problems** (shown when something failed) hides the successful lines.
-- **Clear** dismisses the panel. It's only the last result — the **Status** column in the table
-  always shows each component's current state.
-- **Check status** is a report, not an operation: it finishes as "Done" even if components are
-  stopped, and lists those as "not running".
+- **Clear** dismisses the panel. It's only the last result — the grouped list below always shows each
+  component's current state.
+- **Check now** is a report, not an operation: it finishes as "Done" even if components are
+  stopped, and lists those as "not running" (or "database problem" for WildFly's datasources).
 
 ### Status and the heartbeat
 
-Every component in a server's table has a **Status** chip:
+Every component has a state. The server page shows it in plain words, as the group the component is
+listed under; the dashboard's chips use the shorter status names:
 
-| Status | Meaning |
-|---|---|
-| **Running** | systemd reports the unit `active` |
-| **Stopped** | installed, not running |
-| **Failed** | systemd reports `failed`, or the last start didn't become healthy |
-| **Starting** / **Stopping** | systemd is in the middle of it |
-| **Not installed** | the unit doesn't exist on that server (Start/Restart/Stop All simply skip it) |
-| **Unreachable** | the server couldn't be reached over SSH |
-| **Not checked yet** | no status recorded yet |
+| Server page | Status (dashboard) | Meaning |
+|---|---|---|
+| **Working normally** | **Running** | systemd reports the unit `active` (and, for WildFly, every datasource connects) |
+| **Can't reach the database** | **Failed (database connection)** | WildFly is running, but one or more of its datasources fail `test-connection-in-pool` |
+| **Database password expired** | **Failed (due to expired password)** | it stopped because its database password expired |
+| **Stopped with an error** | **Failed** | systemd reports `failed`, or the last start didn't become healthy |
+| **Stopped** | **Stopped** | installed, not running |
+| **In progress** | **Starting** / **Stopping** | systemd is in the middle of it |
+| **Not installed here** | **Not installed** | the unit doesn't exist on that server (Start/Restart/Stop All simply skip it) |
+| **Couldn't be checked** | **Unreachable** | the server couldn't be reached over SSH |
+| **Not checked yet** | **Not checked yet** | no status recorded yet |
 
 A background **heartbeat** re-checks every component on every server every **5 minutes** (see
 `HEARTBEAT_INTERVAL_CRON`), and once shortly after the app starts. The line above the table shows the
-interval and when the last check ran. Status is also refreshed immediately by **Check status**, by any
+interval and when the last check ran. Status is also refreshed immediately by **Check now**, by any
 Start/Restart/Stop job (step by step while it runs), and right after a server is added or software is
 discovered. The page re-reads statuses every 15 seconds, so a new beat appears on its own — no reload.
 If a server is unreachable it's tried once per beat (not once per component), so a down host can't
-stall the check. Status history is kept for 3 days.
+stall the check. Status history is kept for 3 days. For a running WildFly each beat also runs the
+datasource check (see *WildFly's database connections*), which adds about 1.3 s per datasource; a failure is
+flagged, never acted on. A component parked as *Failed (due to expired password)* or *Failed (database
+connection)* keeps that status while it stays down, instead of turning into a bare "Stopped" at the next beat.
 
 ### Logs
 
-Click **Logs** on a software row to open a full-size log viewer (requires that catalog entry's
+Open a service's **⋯** menu and choose **Show its log** for a full-size log viewer (requires that catalog entry's
 Log path to be set). It shows the last 100–2000 lines with line numbers, jumps to the newest
 lines, colours errors/warnings, and has a **filter** box (matches highlighted), **Wrap**,
 **Auto-refresh** (every 4 s), **Copy** and **Refresh**.

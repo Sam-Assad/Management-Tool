@@ -27,6 +27,14 @@ const GUIDE_STEPS = [
   },
 ];
 
+function greeting(): string {
+  const h = new Date().getHours();
+  if (h < 5) return 'Good night';
+  if (h < 12) return 'Good morning';
+  if (h < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
 function ago(iso: string): string {
   const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
   if (secs < 60) return 'just now';
@@ -56,12 +64,13 @@ export default function ServersDashboard() {
   const components = list.flatMap((s) => s.software);
   const running = components.filter((c) => c.state === 'running').length;
   const stopped = components.filter((c) => c.state === 'stopped').length;
-  const problems = components.filter((c) => ['failed', 'unreachable', 'unknown', 'credential_expired'].includes(c.state)).length;
+  const problems = components.filter((c) => ['failed', 'unreachable', 'unknown', 'credential_expired', 'datasource_down'].includes(c.state)).length;
   const percent = components.length > 0 ? Math.round((running / components.length) * 100) : null;
   const serverOfGroup = new Map(list.map((s) => [s.group_id, s]));
 
   return (
     <div>
+      <p className="page-eyebrow">{greeting()}</p>
       <h1 className="page-title">Fleet overview</h1>
 
       <div className="dash-grid">
@@ -94,7 +103,7 @@ export default function ServersDashboard() {
               <span className="lbl">Stopped</span>
               <b>{stopped}</b>
             </div>
-            <div className="metric">
+            <div className={problems > 0 ? 'metric metric-alert' : 'metric'}>
               <span className="lbl">Problems</span>
               <b>{problems}</b>
             </div>

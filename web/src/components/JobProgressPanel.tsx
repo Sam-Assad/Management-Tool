@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import InfoTip from './InfoTip';
+import DecisionModal, { type Awaiting, type Choice } from './DecisionModal';
 
 interface Step {
   id: number;
@@ -13,22 +14,6 @@ interface Step {
   log_excerpt: string | null;
   // running, and the log has not shown its success line for a while: the operator may vouch for it
   acceptable?: boolean;
-}
-
-interface Awaiting {
-  component: string;
-  server: string;
-  verb: string;
-  summary: string;
-  detail: string;
-  holdsBack: string[];
-  // what "Roll back" would stop (start / restart runs only)
-  rollback?: string[];
-  // set when something else holds a port the component needs
-  portFix?: { label: string; detail: string };
-  // set when this was an expired password/credential: retrying can't help, so only Continue / Roll back show
-  limited?: boolean;
-  expires_at: string;
 }
 
 interface Job {
@@ -74,7 +59,7 @@ function firstLine(text: string | null): string {
 }
 
 function stateLabel(step: Step, isScan: boolean): string {
-  if (isScan && step.status === 'failed') return 'not running';
+  if (isScan && step.status === 'failed') return step.log_excerpt?.startsWith('running, but') ? 'database problem' : 'not running';
   if (step.status === 'healthy' && (step.action === 'stop' || step.action === 'rollback')) return 'stopped';
   if (step.status === 'healthy' && step.action === 'free_port') return 'freed';
   return STEP_LABEL[step.status] ?? step.status;
@@ -98,6 +83,8 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear }: JobProgre
   const [onlyProblems, setOnlyProblems] = useState(false);
   const [deciding, setDeciding] = useState(false);
   const [decisionError, setDecisionError] = useState<string | null>(null);
+  // the question the operator tucked away to look at the run first (a new question pops up again)
+  const [minimizedKey, setMinimizedKey] = useState<string | null>(null);
   const previousStatus = useRef<string | null>(null);
   const onUpdateRef = useRef(onUpdate);
   onUpdateRef.current = onUpdate;
@@ -146,7 +133,7 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear }: JobProgre
     }
   }, [job?.awaiting]);
 
-  async function decide(choice: 'retry' | 'skip' | 'halt' | 'rollback' | 'free_port') {
+  async function decide(choice: Choice) {
     setDeciding(true);
     setDecisionError(null);
     try {
@@ -209,6 +196,8 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear }: JobProgre
   }[outcome];
 
   const rows = onlyProblems ? job.steps.filter((s) => s.status === 'failed' || s.status === 'blocked') : job.steps;
+  const questionKey = job.awaiting ? `${job.awaiting.component}|${job.awaiting.server}|${job.awaiting.expires_at}` : null;
+  const minimized = questionKey !== null && questionKey === minimizedKey;
 
   return (
     <div className={`jp jp-${outcome}`}>
@@ -240,82 +229,23 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear }: JobProgre
         </span>
       </div>
 
-      {job.awaiting && (
+      {job.awaiting && !minimized && (
+        <DecisionModal
+          awaiting={job.awaiting}
+          deciding={deciding}
+          error={decisionError}
+          onDecide={decide}
+          onMinimize={() => setMinimizedKey(questionKey)}
+        />
+      )}
+      {job.awaiting && minimized && (
         <div className="jp-decision">
           <div className="jp-decision-title">{job.awaiting.summary}</div>
-          {job.awaiting.detail && <pre className="step-log">{job.awaiting.detail}</pre>}
-          {job.awaiting.limited && (
-            <div className="jp-decision-hint jp-decision-urgent">
-              This looks like an expired password or credential, so retrying was skipped - it would only fail the same way
-              again. Fix it on the server, then Continue past it, or Roll back to stop everything this run has started.
-            </div>
-          )}
-          <div className="jp-decision-hint">
-            The run is paused.{' '}
-            {job.awaiting.holdsBack.length > 0
-              ? `${job.awaiting.verb === 'stop' ? 'Leaving' : 'Skipping'} it also holds back: ${job.awaiting.holdsBack.join(', ')}.`
-              : 'Nothing else depends on it, so the rest can carry on without it.'}
-          </div>
           <div className="jp-decision-actions">
-            {job.awaiting.portFix && (
-              <span className="with-info">
-                <button className="primary" disabled={deciding} onClick={() => decide('free_port')}>
-                  {job.awaiting.portFix.label}
-                </button>
-                <InfoTip>{job.awaiting.portFix.detail}</InfoTip>
-              </span>
-            )}
-            {!job.awaiting.limited && (
-              <span className="with-info">
-                <button className={job.awaiting.portFix ? '' : 'primary'} disabled={deciding} onClick={() => decide('retry')}>
-                  Retry
-                </button>
-                <InfoTip>Tries {job.awaiting.component} again - for example after you have fixed the cause.</InfoTip>
-              </span>
-            )}
-            <span className="with-info">
-              <button className={job.awaiting.limited ? 'primary' : ''} disabled={deciding} onClick={() => decide('skip')}>
-                {job.awaiting.limited
-                  ? `Continue without ${job.awaiting.component}`
-                  : job.awaiting.verb === 'stop'
-                    ? `Leave ${job.awaiting.component} running and continue`
-                    : `Skip ${job.awaiting.component} and continue`}
-              </button>
-              <InfoTip>
-                Gives up on {job.awaiting.component} and carries on with the rest. Only components that depend on it through
-                a condition are held back.
-              </InfoTip>
-            </span>
-            {!job.awaiting.limited && (
-              <span className="with-info">
-                <button className="danger" disabled={deciding} onClick={() => decide('halt')}>
-                  Stop the run here
-                </button>
-                <InfoTip>
-                  Ends the run now and starts nothing further, so you can look into the problem. Whatever is already running
-                  is left running. If nobody answers within 30 minutes, the run stops by itself.
-                </InfoTip>
-              </span>
-            )}
-            {job.awaiting.rollback && (
-              <span className="with-info">
-                <button className="danger" disabled={deciding} onClick={() => decide('rollback')}>
-                  Roll back
-                </button>
-                <InfoTip>
-                  Undoes this run: stops what it has started so far, in the stop order (like Stop All, but only these), and
-                  ends the run. Components that were already running when it began are not touched.
-                  {job.awaiting.rollback.length > 0 && (
-                    <>
-                      <br />
-                      <b>Would stop:</b> {job.awaiting.rollback.join(', ')}.
-                    </>
-                  )}
-                </InfoTip>
-              </span>
-            )}
+            <button className="primary" onClick={() => setMinimizedKey(null)}>
+              Open the decision
+            </button>
           </div>
-          {decisionError && <div className="jp-error">{decisionError}</div>}
         </div>
       )}
 
@@ -332,7 +262,7 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear }: JobProgre
                   <span className="jp-dot" />
                   <b className="jp-name">{step.software_name ?? `software ${step.software_id}`}</b>
                   <span className="muted jp-where">{step.server_name ?? `server ${step.server_id}`} · {step.action.replace('_', ' ')}</span>
-                  {!failed && step.status !== 'blocked' && step.status !== 'running' && step.log_excerpt && (
+                  {(!failed || isScan) && step.status !== 'blocked' && step.status !== 'running' && step.log_excerpt && (
                     <span className="jp-msg">{firstLine(step.log_excerpt)}</span>
                   )}
                   {step.acceptable && (
