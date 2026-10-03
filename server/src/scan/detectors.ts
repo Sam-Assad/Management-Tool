@@ -1,6 +1,7 @@
 import type { Client } from 'ssh2';
 import type { SoftwareDefinition } from '@healthcheck/shared';
 import { runCommand } from '../ssh/exec.js';
+import { isWildFly, checkWildFlyDatasources, datasourceDownDetail, type DatasourceFailure } from './datasources.js';
 
 export interface UnitState {
   installed: boolean;
@@ -103,7 +104,8 @@ export function systemctlCommand(action: 'start' | 'stop', unit: string): string
 
 // What a component is doing right now, in words an operator understands. `up` is true only
 // for 'running'; every other state counts as down for sequencing/heartbeat purposes.
-export type ComponentState = 'running' | 'stopped' | 'failed' | 'starting' | 'stopping' | 'not_installed' | 'unreachable';
+// 'datasource_down' = WildFly is active, but one or more of its datasources fail a connection test.
+export type ComponentState = 'running' | 'stopped' | 'failed' | 'starting' | 'stopping' | 'not_installed' | 'unreachable' | 'datasource_down';
 
 export const COMPONENT_STATES: ComponentState[] = [
   'running',
@@ -113,29 +115,39 @@ export const COMPONENT_STATES: ComponentState[] = [
   'stopping',
   'not_installed',
   'unreachable',
+  'datasource_down',
 ];
 
+// `detail` is what to store in heartbeat_log.detail - the state word, or for datasource_down the state
+// plus the failed datasource names. `datasources` carries the full failure when there is one.
 export async function checkComponent(
   client: Client,
   def: SoftwareDefinition
-): Promise<{ up: boolean; state: ComponentState }> {
+): Promise<{ up: boolean; state: ComponentState; detail: string; datasources?: DatasourceFailure[] }> {
   if (def.detect_method === 'systemd') {
     const unit = await probeComponentUnit(client, def);
-    if (!unit.installed) return { up: false, state: 'not_installed' };
+    if (!unit.installed) return { up: false, state: 'not_installed', detail: 'not_installed' };
     switch (unit.active) {
-      case 'active':
-        return { up: true, state: 'running' };
+      case 'active': {
+        if (isWildFly(def)) {
+          const ds = await checkWildFlyDatasources(client);
+          if (ds.failures.length > 0) {
+            return { up: false, state: 'datasource_down', detail: datasourceDownDetail(ds.failures), datasources: ds.failures };
+          }
+        }
+        return { up: true, state: 'running', detail: 'running' };
+      }
       case 'failed':
-        return { up: false, state: 'failed' };
+        return { up: false, state: 'failed', detail: 'failed' };
       case 'activating':
       case 'reloading':
-        return { up: false, state: 'starting' };
+        return { up: false, state: 'starting', detail: 'starting' };
       case 'deactivating':
-        return { up: false, state: 'stopping' };
+        return { up: false, state: 'stopping', detail: 'stopping' };
       default:
-        return { up: false, state: 'stopped' };
+        return { up: false, state: 'stopped', detail: 'stopped' };
     }
   }
   const up = await detectPresence(client, def);
-  return { up, state: up ? 'running' : 'stopped' };
+  return { up, state: up ? 'running' : 'stopped', detail: up ? 'running' : 'stopped' };
 }

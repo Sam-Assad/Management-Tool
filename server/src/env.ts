@@ -27,5 +27,7 @@ export const env = {
   portReleaseWaitS: Math.max(0, Number(process.env.PORT_RELEASE_WAIT_S ?? 30)),
   // a unit that is running but has not printed its success line after this long gets the "Mark as started" option
   startHintAfterS: Math.max(1, Number(process.env.START_HINT_AFTER_S ?? 30)),
+  // jboss-cli.sh path for WildFly's post-start datasource check - the same across every market/server.
+  wildflyCliPath: process.env.WILDFLY_CLI_PATH ?? '/Data/software/bin/wildfly-26.1.3.Final/bin/jboss-cli.sh',
   nodeEnv: process.env.NODE_ENV ?? 'development',
 };

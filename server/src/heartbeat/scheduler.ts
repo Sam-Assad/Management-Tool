@@ -22,7 +22,12 @@ function record(serverId: number, softwareId: number, source: 'heartbeat' | 'dis
   // beat re-checks it - systemd shows it plainly "inactive"/"stopped", nothing wrong with that reading,
   // just less useful than the reason we already know. Keep the reason until either it comes back up (a
   // real change worth recording) or a fresh Start/Restart attempt records its own new outcome.
-  if (source === 'heartbeat' && !up && latestDetail(serverId, softwareId) === 'credential_expired') return;
+  // Same for WildFly stopped because a datasource failed: keep "which datasources" on screen while it's
+  // down, instead of turning into a bare "Stopped" at the next beat.
+  if (source === 'heartbeat' && !up && !detail.startsWith('datasource_down')) {
+    const latest = latestDetail(serverId, softwareId);
+    if (latest === 'credential_expired' || latest?.startsWith('datasource_down')) return;
+  }
   insertRow('heartbeat_log', {
     server_id: serverId,
     software_id: softwareId,
@@ -76,8 +81,8 @@ export async function checkGroup(groupId: number) {
 
         for (const def of assignedDefs) {
           try {
-            const { up, state } = await checkComponent(client, def);
-            record(server.id, def.id, 'heartbeat', up, state);
+            const { up, state, detail } = await checkComponent(client, def);
+            record(server.id, def.id, 'heartbeat', up, detail);
             note(def.id, state === 'not_installed' ? 'missing' : 'present');
           } catch (err: any) {
             record(server.id, def.id, 'heartbeat', false, `unreachable: ${String(err?.message ?? err)}`);

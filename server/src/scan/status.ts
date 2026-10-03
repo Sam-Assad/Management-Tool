@@ -46,8 +46,15 @@ export function getServerComponentStatus(
   }
   const detail = row.detail ?? '';
   let state: string;
-  if (detail.startsWith('unreachable')) state = 'unreachable';
-  else if (row.status === 'up') state = 'running';
+  let shownDetail: string | null = null;
+  if (detail.startsWith('unreachable')) {
+    state = 'unreachable';
+    shownDetail = detail;
+  } else if (detail.startsWith('datasource_down')) {
+    // "datasource_down:CONVERSIONS,LOYALTY_TRX" - the names are what the UI shows
+    state = 'datasource_down';
+    shownDetail = detail.slice('datasource_down:'.length) || null;
+  } else if (row.status === 'up') state = 'running';
   else state = KNOWN_STATES.includes(detail) ? detail : 'stopped';
   return {
     server_id: serverId,
@@ -55,7 +62,7 @@ export function getServerComponentStatus(
     status: row.status,
     state,
     checked_at: row.checked_at,
-    detail: detail.startsWith('unreachable') ? detail : null,
+    detail: shownDetail,
   };
 }
 

@@ -17,6 +17,13 @@ import {
   type PortHolder,
 } from '../scan/ports.js';
 import { stopOrderIds, startDependents, stopDependents, startPredecessors, stopPredecessors } from './ordering.js';
+import {
+  CREDENTIAL_EXPIRED_RE,
+  isWildFly,
+  checkWildFlyDatasources,
+  friendlyDsReason,
+  datasourceDownDetail,
+} from '../scan/datasources.js';
 import type { SoftwareDefinition, Server as ServerRow } from '@healthcheck/shared';
 
 function nowIso() {
@@ -59,6 +66,9 @@ function finishJob(jobId: number, status: 'succeeded' | 'failed', errorMessage?:
   });
   credentialFailures.forEach((key) => {
     if (key.startsWith(`${jobId}:`)) credentialFailures.delete(key);
+  });
+  datasourceFailures.forEach((_v, key) => {
+    if (key.startsWith(`${jobId}:`)) datasourceFailures.delete(key);
   });
   pendingSteps.forEach((_id, key) => {
     if (key.startsWith(`${jobId}:`)) pendingSteps.delete(key);
@@ -118,6 +128,10 @@ const portConflicts = new Map<string, { ports: number[]; holders: PortHolder[] }
 // A component that failed because of an expired password/credential: retrying is pointless, so the
 // question offers only Continue / Roll back (see runGroupSequence's ask() call).
 const credentialFailures = new Set<string>();
+
+// A component whose post-start datasource check failed: which datasource(s) and a plain-English reason,
+// so the question the operator is asked can name them directly instead of just saying "did not start".
+const datasourceFailures = new Map<string, { names: string[]; reason: string }>();
 
 // Live control of a running job. Ending a run (stop / roll back) has to reach starts that are already
 // under way: cancel every health wait at once, and make anything about to start check first.
@@ -219,8 +233,8 @@ async function recordActualState(client: any, serverId: number, def: SoftwareDef
     return;
   }
   try {
-    const { up, state } = await checkComponent(client, def);
-    recordStatus(serverId, def.id, 'scan', up ? 'up' : 'down', state);
+    const { up, detail } = await checkComponent(client, def);
+    recordStatus(serverId, def.id, 'scan', up ? 'up' : 'down', detail);
   } catch {
     recordStatus(serverId, def.id, 'scan', 'down', 'failed');
   }
@@ -233,17 +247,14 @@ function isGroupBusy(groupId: number): boolean {
   return row.count > 0;
 }
 
-// A password/credential that has expired will fail exactly the same way every attempt (DB login,
-// LDAP bind, a keystore password, ...) - retrying it is pointless and just wastes the wait. Covers the
-// common phrasings plus Oracle's ORA-28001 and Active Directory's "data 773" bind response.
-export const CREDENTIAL_EXPIRED_RE = /\bpassword\b[^\n]{0,25}\bexpired\b|\bexpired\b[^\n]{0,25}\bpassword\b|\bORA-28001\b|data 773\b/i;
-
 interface HealthResult {
   healthy: boolean;
   excerpt: string;
   // crash = the service exited/restarted (worth retrying); timeout = never became healthy in time;
-  // credential_expired = a password/credential expiry was seen in the log - never worth retrying
-  reason?: 'crash' | 'timeout' | 'cancelled' | 'other' | 'credential_expired';
+  // credential_expired = a password/credential expiry was seen in the log - never worth retrying;
+  // datasource_down = the log said it started fine, but a configured datasource's pool failed
+  // test-connection-in-pool - WildFly can log "started (with errors)" while a JCA pool is unusable.
+  reason?: 'crash' | 'timeout' | 'cancelled' | 'other' | 'credential_expired' | 'datasource_down';
   // ports the log said were already taken
   ports?: number[];
 }
@@ -699,11 +710,43 @@ async function startAttempts(
     updateStep(jobId, step.id, { status: 'skipped', log_excerpt: why, finished_at: nowIso() });
     return true;
   };
+  // WildFly only: test every datasource it has. Any failure = not healthy, whatever systemd and the log
+  // say - stop it right away (before systemd's Restart= brings it back against the same broken database),
+  // record which datasources, and fail the step so the run asks the operator.
+  const datasourceGate = async (client: any, startedNow: boolean): Promise<{ ok: boolean; note: string }> => {
+    if (!isWildFly(def)) return { ok: true, note: '' };
+    updateStep(jobId, step.id, { log_excerpt: `${def.name} is up - testing its database connections (datasources)...` });
+    const ds = await checkWildFlyDatasources(client);
+    if (!ds.checked) return { ok: true, note: `\n\nDatasource check skipped: ${ds.note}` };
+    if (ds.failures.length === 0) return { ok: true, note: `\n\nAll ${ds.tested.length} datasources passed a connection test.` };
+    await stopQuietly(client, def);
+    const names = ds.failures.map((f) => f.name);
+    const failureText = ds.failures.map((f) => `${f.name}: ${f.reason}`).join('\n');
+    const cause = friendlyDsReason(failureText);
+    if (CREDENTIAL_EXPIRED_RE.test(failureText)) credentialFailures.add(conflictKey);
+    datasourceFailures.set(conflictKey, { names, reason: cause });
+    updateStep(jobId, step.id, {
+      status: 'failed',
+      log_excerpt:
+        `${def.name} ${startedNow ? 'started' : 'was running'}, but ${names.length} of ${ds.tested.length} datasources failed a connection test, ` +
+        `so ${def.name} was stopped: ${names.join(', ')}.\n\nLikely cause: ${cause}.\n\nTechnical detail:\n${failureText}`,
+      finished_at: nowIso(),
+    });
+    recordStatus(server.id, def.id, 'scan', 'down', datasourceDownDetail(ds.failures));
+    return { ok: false, note: '' };
+  };
+  // a Retry starts from a clean slate: a new failure says for itself what kind it is
+  credentialFailures.delete(conflictKey);
+  datasourceFailures.delete(conflictKey);
   try {
     const client = await getConnection(server as any);
     if (skipMissing && (await notInstalledHere(client, def))) return skipStep('not installed on this server - skipped');
     if (mode === 'start' && (await detectPresence(client, def))) {
-      updateStep(jobId, step.id, { status: 'healthy', log_excerpt: 'already running - left untouched', finished_at: nowIso() });
+      // "Running" in systemd isn't enough for WildFly: a running WildFly with a broken datasource is
+      // exactly what this check exists to catch.
+      const gate = await datasourceGate(client, false);
+      if (!gate.ok) return false;
+      updateStep(jobId, step.id, { status: 'healthy', log_excerpt: `already running - left untouched${gate.note}`, finished_at: nowIso() });
       recordStatus(server.id, def.id, 'scan', 'up', 'running');
       return true;
     }
@@ -741,9 +784,12 @@ async function startAttempts(
       last = await watch.result;
       endWatch(jobId, step.id);
       if (last.healthy) {
+        const gate = await datasourceGate(client, true);
+        if (!gate.ok) return false;
         portConflicts.delete(conflictKey);
         credentialFailures.delete(conflictKey);
-        updateStep(jobId, step.id, { status: 'healthy', log_excerpt: last.excerpt, finished_at: nowIso() });
+        datasourceFailures.delete(conflictKey);
+        updateStep(jobId, step.id, { status: 'healthy', log_excerpt: `${last.excerpt}${gate.note}`, finished_at: nowIso() });
         recordStatus(server.id, def.id, 'scan', 'up', 'running');
         return true;
       }
@@ -840,6 +886,9 @@ interface Question {
   // set when the failure was an expired password/credential: retrying can't help, so only Continue /
   // Roll back are offered (no Retry, no Stop the run)
   limited?: boolean;
+  // set when WildFly failed its datasource check: which datasources, and the cause in plain words
+  datasources?: string[];
+  cause?: string;
 }
 
 function askOperator(jobId: number, question: Question): Promise<Decision> {
@@ -884,11 +933,22 @@ function transitiveDependents(from: number, dependents: Map<number, number[]>, w
   return [...seen];
 }
 
-function lastStepReason(jobId: number, serverId: number, softwareId: number): string {
+// Final message of a single-component Start/Restart that failed (no question is asked for those).
+function singleFailureMessage(jobId: number, server: ServerRow, def: SoftwareDefinition): string {
+  const ds = datasourceFailures.get(pendingKey(jobId, server.id, def.id));
+  if (!ds) return `${def.name} failed to become healthy`;
+  return `${def.name} has been stopped: ${ds.names.length === 1 ? 'one of its datasources' : `${ds.names.length} of its datasources`} can't connect - ${ds.reason}. Failed: ${ds.names.join(', ')}.`;
+}
+
+function lastStepExcerpt(jobId: number, serverId: number, softwareId: number): string {
   const row = sqlite
     .prepare('SELECT log_excerpt FROM job_steps WHERE job_run_id = ? AND server_id = ? AND software_id = ? ORDER BY id DESC LIMIT 1')
     .get(jobId, serverId, softwareId) as { log_excerpt: string | null } | undefined;
-  return (row?.log_excerpt ?? '').split('\n').filter((l) => l.trim()).slice(0, 3).join('\n').slice(0, 400);
+  return (row?.log_excerpt ?? '').slice(0, 6000);
+}
+
+function lastStepReason(jobId: number, serverId: number, softwareId: number): string {
+  return lastStepExcerpt(jobId, serverId, softwareId).split('\n').filter((l) => l.trim()).slice(0, 3).join('\n').slice(0, 400);
 }
 
 interface RunResult {
@@ -1051,21 +1111,34 @@ async function runGroupSequence(
     let ok = await stepFn(jobId, server, def, true, env.startAttempts);
     while (!ok) {
       const limited = credentialFailures.has(pendingKey(jobId, server.id, def.id));
+      const dsFailure = datasourceFailures.get(pendingKey(jobId, server.id, def.id));
       const holdsBack = transitiveDependents(def.id, dependents, inRun)
         .map((id) => nameOf.get(id))
         .filter((n): n is string => Boolean(n));
+      const onServer = servers.length > 1 ? ` on ${server.name}` : '';
+      const failedCount = dsFailure ? (dsFailure.names.length === 1 ? 'one of its datasources' : `${dsFailure.names.length} of its datasources`) : '';
+      let summary: string;
+      if (limited && dsFailure) {
+        summary = `${def.name}${onServer} has been stopped: ${failedCount} can't connect because ${dsFailure.reason}. Retrying won't help until the password is renewed.`;
+      } else if (limited) {
+        summary = `${def.name}${onServer}'s password or credentials look expired - retrying was skipped, it would fail the same way.`;
+      } else if (dsFailure) {
+        summary = `${def.name}${onServer} has been stopped: ${failedCount} can't connect - ${dsFailure.reason}. The applications using them won't work until this is fixed.`;
+      } else {
+        summary = `${def.name}${onServer} ${VERB_TEXT[verb].didNot}${verb !== 'stop' && env.startAttempts > 1 ? ` (after up to ${env.startAttempts} attempts)` : ''}.`;
+      }
       const choice = await ask({
         component: def.name,
         server: server.name,
         verb,
-        summary: limited
-          ? `${def.name}${servers.length > 1 ? ` on ${server.name}` : ''}'s password or credentials look expired - retrying was skipped, it would fail the same way.`
-          : `${def.name}${servers.length > 1 ? ` on ${server.name}` : ''} ${VERB_TEXT[verb].didNot}${verb !== 'stop' && env.startAttempts > 1 ? ` (after up to ${env.startAttempts} attempts)` : ''}.`,
-        detail: lastStepReason(jobId, server.id, def.id),
+        summary,
+        detail: dsFailure ? lastStepExcerpt(jobId, server.id, def.id) : lastStepReason(jobId, server.id, def.id),
         holdsBack,
         rollback: rollbackNames(def),
         portFix: describeFixFor(jobId, server.id, def.id),
         limited,
+        datasources: dsFailure?.names,
+        cause: dsFailure?.reason,
       });
       if (choice === 'retry') {
         ok = await stepFn(jobId, server, def, true, env.startAttempts);
@@ -1272,7 +1345,7 @@ export async function runStartOne(serverId: number, softwareId: number) {
   void (async () => {
     try {
       const ok = await startStep(job.id, server, def);
-      finishJob(job.id, ok ? 'succeeded' : 'failed', ok ? undefined : `${def.name} failed to become healthy`);
+      finishJob(job.id, ok ? 'succeeded' : 'failed', ok ? undefined : singleFailureMessage(job.id, server, def));
     } catch (err: any) {
       finishJob(job.id, 'failed', String(err?.message ?? err));
     }
@@ -1343,7 +1416,7 @@ export async function runRestartOne(serverId: number, softwareId: number) {
 
       const ok = await restartStep(job.id, server, def);
       if (!ok) {
-        finishJob(job.id, 'failed', `${def.name} failed to become healthy`);
+        finishJob(job.id, 'failed', singleFailureMessage(job.id, server, def));
         return;
       }
 
@@ -1394,11 +1467,15 @@ export async function runScan(groupId: number) {
           updateStep(job.id, step.id, { status: 'running', started_at: nowIso() });
           try {
             const client = await getConnection(server as any);
-            const { up: present, state } = await checkComponent(client, def);
-            recordStatus(server.id, def.id, 'scan', present ? 'up' : 'down', state);
+            const { up: present, state, detail, datasources } = await checkComponent(client, def);
+            recordStatus(server.id, def.id, 'scan', present ? 'up' : 'down', detail);
+            const failureText = (datasources ?? []).map((f) => `${f.name}: ${f.reason}`).join('\n');
             updateStep(job.id, step.id, {
               status: present ? 'healthy' : 'failed',
-              log_excerpt: state.replace('_', ' '),
+              log_excerpt: datasources?.length
+                ? `running, but ${datasources.length} datasource${datasources.length > 1 ? 's' : ''} can't connect - ${friendlyDsReason(failureText)}: ` +
+                  `${datasources.map((f) => f.name).join(', ')}\n\n${failureText}`
+                : state.replace('_', ' '),
               finished_at: nowIso(),
             });
           } catch (err: any) {
