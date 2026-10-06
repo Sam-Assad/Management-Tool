@@ -24,6 +24,8 @@ import {
 import type { ServerSummary } from '../api/hooks';
 import JobProgressPanel from '../components/JobProgressPanel';
 import { size } from '../components/ArtemisNoticeModal';
+import { useCan } from '../auth/AuthContext';
+import { NO_PERMISSION, type Permission } from '../auth/permissions';
 import RowMenu from '../components/RowMenu';
 import '../styles/server-page.css';
 import LogViewer from '../components/LogViewer';
@@ -43,6 +45,7 @@ function when(iso: string): string {
 // Artemis's last reading, in a box at the top of the page: DLQ, ExpiryQueue and memory, when and how it was
 // read, and Check now. Red when memory is at or over the limit.
 function ArtemisBox({ serverId }: { serverId: number }) {
+  const can = useCan();
   const { data } = useArtemisStatus(serverId);
   const checkNow = useArtemisCheckNow(serverId);
   if (!data?.has_artemis) return null;
@@ -61,7 +64,12 @@ function ArtemisBox({ serverId }: { serverId: number }) {
         <h2 id="sv-artemis-title">Artemis queues and memory</h2>
         <span className="sv-artemis-when">
           {last ? `Read ${when(last.checked_at)} (${ARTEMIS_SOURCE[last.source] ?? last.source}).` : 'Not read yet.'}{' '}
-          <button className="sv-linkbtn" disabled={checkNow.isPending} onClick={() => checkNow.mutate()} title="Reads DLQ, ExpiryQueue and memory now. Changes nothing.">
+          <button
+            className="sv-linkbtn"
+            disabled={checkNow.isPending || !can('run_checks')}
+            onClick={() => checkNow.mutate()}
+            title={can('run_checks') ? 'Reads DLQ, ExpiryQueue and memory now. Changes nothing.' : NO_PERMISSION}
+          >
             {checkNow.isPending ? 'Checking…' : 'Check now'}
           </button>
         </span>
@@ -268,6 +276,7 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
   const { data: suggestions, refetch: refetchSuggestions } = useSuggestions(id);
   const { data: status, refetch: refetchStatus } = useGroupStatus(id);
   const now = useNow(30000);
+  const can = useCan();
 
   const testConnection = useTestConnection();
   const deleteServer = useDeleteServer();
@@ -462,6 +471,9 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
               : { tone: 'ok', title: 'Everything is working', text: `All ${counts.ok} services on ${server.name} are up and running.` };
 
   const busyTitle = jobRunning ? LOCKED : undefined;
+  // greyed out when a run is going, or when this person isn't allowed (the server refuses it anyway)
+  const off = (p: Permission) => jobRunning || !can(p);
+  const tip = (p: Permission, normal?: string) => (!can(p) ? NO_PERMISSION : (busyTitle ?? normal));
 
   const renderRow = (s: Service) => {
     const down = (s.view.tone === 'bad' || s.view.tone === 'stopped') && s.state !== 'datasource_down' && s.state !== 'not_ready' && s.state !== 'unreachable';
@@ -506,8 +518,8 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
           {down && (
             <button
               className="sv-start"
-              disabled={jobRunning}
-              title={busyTitle}
+              disabled={off('start_one')}
+              title={tip('start_one')}
               onClick={() => runJob(() => startOne.mutateAsync({ serverId: server.id, softwareId: s.id }))}
             >
               Start
@@ -516,8 +528,8 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
           {(s.state === 'datasource_down' || s.state === 'not_ready') && (
             <button
               className="sv-start"
-              disabled={jobRunning}
-              title={busyTitle}
+              disabled={off('restart_one')}
+              title={tip('restart_one')}
               onClick={() => runJob(() => restartOne.mutateAsync({ serverId: server.id, softwareId: s.id }))}
             >
               Restart
@@ -526,11 +538,17 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
           <RowMenu
             label={`More actions for ${s.name}`}
             items={[
-              { label: 'Start', disabled: jobRunning, title: busyTitle, onSelect: () => runJob(() => startOne.mutateAsync({ serverId: server.id, softwareId: s.id })) },
-              { label: 'Restart', disabled: jobRunning, title: busyTitle, onSelect: () => runJob(() => restartOne.mutateAsync({ serverId: server.id, softwareId: s.id })) },
-              { label: 'Stop', disabled: jobRunning, title: busyTitle, onSelect: () => runJob(() => stopOne.mutateAsync({ serverId: server.id, softwareId: s.id })) },
-              { label: 'Show its log', onSelect: () => setLogSoftwareId(s.id) },
-              { label: 'Remove from this list', danger: true, onSelect: () => toggleSoftware(s.id, false) },
+              { label: 'Start', disabled: off('start_one'), title: tip('start_one'), onSelect: () => runJob(() => startOne.mutateAsync({ serverId: server.id, softwareId: s.id })) },
+              { label: 'Restart', disabled: off('restart_one'), title: tip('restart_one'), onSelect: () => runJob(() => restartOne.mutateAsync({ serverId: server.id, softwareId: s.id })) },
+              { label: 'Stop', disabled: off('stop_one'), title: tip('stop_one'), onSelect: () => runJob(() => stopOne.mutateAsync({ serverId: server.id, softwareId: s.id })) },
+              { label: 'Show its log', disabled: !can('view_logs'), title: can('view_logs') ? undefined : NO_PERMISSION, onSelect: () => setLogSoftwareId(s.id) },
+              {
+                label: 'Remove from this list',
+                danger: true,
+                disabled: !can('manage_servers'),
+                title: can('manage_servers') ? undefined : NO_PERMISSION,
+                onSelect: () => toggleSoftware(s.id, false),
+              },
             ]}
           />
         </div>
@@ -562,7 +580,9 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
           </p>
         </div>
         <span className="with-info">
-          <button onClick={handleTestConnection}>Test connection</button>
+          <button onClick={handleTestConnection} disabled={!can('run_checks')} title={can('run_checks') ? undefined : NO_PERMISSION}>
+            Test connection
+          </button>
           <InfoTip>Checks that Healthcheck can still log in to this server.</InfoTip>
         </span>
       </header>
@@ -578,7 +598,7 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
         <p className="sv-checked">
           {status?.last_checked_at ? `Checked ${timeAgo(status.last_checked_at, now)}.` : 'First check pending.'}{' '}
           {status?.interval_minutes ? `Refreshes on its own every ${status.interval_minutes} minutes.` : 'Refreshes on its own.'}{' '}
-          <button className="sv-linkbtn" onClick={() => runJob(() => scan.mutateAsync())} disabled={jobRunning} title={busyTitle ?? 'Looks at every service now. Changes nothing.'}>
+          <button className="sv-linkbtn" onClick={() => runJob(() => scan.mutateAsync())} disabled={off('run_checks')} title={tip('run_checks', 'Looks at every service now. Changes nothing.')}>
             Check now
           </button>
         </p>
@@ -587,7 +607,7 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
 
       <div className="sv-bulk">
           <span className="with-info">
-            <button className="primary sv-bulk-main" onClick={() => runJob(() => startAll.mutateAsync())} disabled={jobRunning} title={busyTitle}>
+            <button className="primary sv-bulk-main" onClick={() => runJob(() => startAll.mutateAsync())} disabled={off('start_all')} title={tip('start_all')}>
               Start All
             </button>
             <InfoTip>
@@ -599,8 +619,8 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
             <button
               className="outline"
               onClick={() => runJob(() => restartAll.mutateAsync(), `Restart everything on ${server.name}, in order?`)}
-              disabled={jobRunning}
-              title={busyTitle}
+              disabled={off('restart_all')}
+              title={tip('restart_all')}
             >
               Restart All
             </button>
@@ -610,8 +630,8 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
             <button
               className="danger"
               onClick={() => runJob(() => stopAll.mutateAsync(), `Stop everything on ${server.name}? This will take it down.`)}
-              disabled={jobRunning}
-              title={busyTitle}
+              disabled={off('stop_all')}
+              title={tip('stop_all')}
             >
               Stop All
             </button>
@@ -655,8 +675,10 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
             {suggestions.map((s) => (
               <li key={s.software_id}>
                 <span>{s.name}</span>
-                <button onClick={() => toggleSoftware(s.software_id, true)}>Watch it</button>
-                <button className="sv-linkbtn" onClick={() => handleDismissSuggestion(s.software_id)}>
+                <button onClick={() => toggleSoftware(s.software_id, true)} disabled={!can('manage_servers')} title={can('manage_servers') ? undefined : NO_PERMISSION}>
+                  Watch it
+                </button>
+                <button className="sv-linkbtn" onClick={() => handleDismissSuggestion(s.software_id)} disabled={!can('manage_servers')}>
                   Ignore
                 </button>
               </li>
@@ -672,7 +694,9 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
 
       <footer className="sv-foot">
         <span className="with-info">
-          <button onClick={handleDiscover}>Find installed software</button>
+          <button onClick={handleDiscover} disabled={!can('manage_servers')} title={can('manage_servers') ? undefined : NO_PERMISSION}>
+            Find installed software
+          </button>
           <InfoTip>Looks for the platform's software installed on this server that isn't in this list yet, and adds it.</InfoTip>
         </span>
         <label className="sv-switch">
@@ -687,7 +711,7 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
           Show technical details
         </label>
         <span className="with-info sv-foot-end">
-          <button className="sv-linkbtn sv-danger-link" onClick={handleRemoveServer}>
+          <button className="sv-linkbtn sv-danger-link" onClick={handleRemoveServer} disabled={!can('manage_servers')} title={can('manage_servers') ? undefined : NO_PERMISSION}>
             Stop watching this server
           </button>
           <InfoTip>Removes this server from Healthcheck. Nothing on the server itself is changed or stopped.</InfoTip>

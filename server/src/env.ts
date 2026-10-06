@@ -42,5 +42,19 @@ export const env = {
   // Artemis's own beat (DLQ / ExpiryQueue / memory): three times a day by default, on the Healthcheck machine's clock
   artemisCheckCron: process.env.ARTEMIS_CHECK_CRON ?? '0 8,14,20 * * *',
   artemisMemoryDangerPercent: Math.min(100, Math.max(1, Number(process.env.ARTEMIS_MEMORY_DANGER_PERCENT ?? 50))),
+  // sign-in: a session ends after this long without use, and after this long in any case
+  sessionIdleHours: Math.max(0.25, Number(process.env.SESSION_IDLE_HOURS ?? 8)),
+  sessionMaxHours: Math.max(1, Number(process.env.SESSION_MAX_HOURS ?? 24)),
+  // wrong passwords in a row before an account is locked, and for how long
+  loginMaxAttempts: Math.max(3, Number(process.env.LOGIN_MAX_ATTEMPTS ?? 5)),
+  loginLockMinutes: Math.max(1, Number(process.env.LOGIN_LOCK_MINUTES ?? 15)),
+  // a temporary password from an admin reset stops working after this many hours
+  tempPasswordHours: Math.max(1, Number(process.env.TEMP_PASSWORD_HOURS ?? 24)),
+  // The address people open Healthcheck at: `npm run reset-password` prints its one-time links with it.
+  publicUrl: (process.env.PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? 4000}`).replace(/\/+$/, ''),
+  // how long such a link works
+  resetLinkMinutes: Math.max(5, Number(process.env.RESET_LINK_MINUTES ?? 30)),
+  // mark the session cookie Secure (only sent over HTTPS) - turn on when Healthcheck is served over HTTPS
+  cookieSecure: process.env.COOKIE_SECURE === 'true',
   nodeEnv: process.env.NODE_ENV ?? 'development',
 };

@@ -9,6 +9,8 @@ import AddServerModal from '../components/AddServerModal';
 import DonutChart from '../components/DonutChart';
 import InfoTip from '../components/InfoTip';
 import JobProgressPanel, { KIND_LABEL } from '../components/JobProgressPanel';
+import { useCan } from '../auth/AuthContext';
+import { NO_PERMISSION } from '../auth/permissions';
 import { IconPlus, IconServer } from '../components/Icons';
 
 type BulkAction = 'start' | 'restart' | 'stop';
@@ -77,6 +79,7 @@ export default function ServersDashboard() {
   const [showAdd, setShowAdd] = useState(false);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const can = useCan();
 
   // ---- several servers at once: tick them, then Start All / Restart All / Stop All on every one of them.
   // Each server gets its own run - exactly the one its own page's button starts (its catalog services, in
@@ -186,7 +189,7 @@ export default function ServersDashboard() {
               ? 'Add your first server to start, restart and stop the Loyalty platform in the right order.'
               : `${list.length} server${list.length === 1 ? '' : 's'} and ${components.length} components under control. Start, restart and stop them in the right order.`}
           </p>
-          <button className="primary" onClick={() => setShowAdd(true)}>
+          <button className="primary" onClick={() => setShowAdd(true)} disabled={!can('manage_servers')} title={can('manage_servers') ? undefined : NO_PERMISSION}>
             <IconPlus size={14} /> Add server
           </button>
         </div>
@@ -231,6 +234,7 @@ export default function ServersDashboard() {
                     </b>
                     <span className="muted">
                       {word} · {ago(job.finished_at ?? job.started_at)}
+                      {job.started_by ? ` · by ${job.started_by}` : ''}
                     </span>
                   </span>
                 </>
@@ -253,7 +257,7 @@ export default function ServersDashboard() {
 
       <div className="section-head">
         <h2>Servers</h2>
-        <button className="primary" onClick={() => setShowAdd(true)}>
+        <button className="primary" onClick={() => setShowAdd(true)} disabled={!can('manage_servers')} title={can('manage_servers') ? undefined : NO_PERMISSION}>
           <IconPlus size={14} /> Add server
         </button>
       </div>
@@ -285,7 +289,7 @@ export default function ServersDashboard() {
           </span>
           <span className="fleet-actions">
             <span className="with-info">
-              <button className="primary" disabled={selectedServers.length === 0 || bulkBusy} onClick={() => runOnSelected('start')}>
+              <button className="primary" disabled={selectedServers.length === 0 || bulkBusy || !can('start_all')} title={can('start_all') ? undefined : NO_PERMISSION} onClick={() => runOnSelected('start')}>
                 Start All
               </button>
               <InfoTip>
@@ -294,13 +298,13 @@ export default function ServersDashboard() {
               </InfoTip>
             </span>
             <span className="with-info">
-              <button className="outline" disabled={selectedServers.length === 0 || bulkBusy} onClick={() => runOnSelected('restart')}>
+              <button className="outline" disabled={selectedServers.length === 0 || bulkBusy || !can('restart_all')} title={can('restart_all') ? undefined : NO_PERMISSION} onClick={() => runOnSelected('restart')}>
                 Restart All
               </button>
               <InfoTip>On every selected server, stops and starts each catalog service again, even the ones that are working.</InfoTip>
             </span>
             <span className="with-info">
-              <button className="danger" disabled={selectedServers.length === 0 || bulkBusy} onClick={() => runOnSelected('stop')}>
+              <button className="danger" disabled={selectedServers.length === 0 || bulkBusy || !can('stop_all')} title={can('stop_all') ? undefined : NO_PERMISSION} onClick={() => runOnSelected('stop')}>
                 Stop All
               </button>
               <InfoTip>On every selected server, stops each catalog service, one at a time, in a safe order.</InfoTip>

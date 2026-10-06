@@ -95,13 +95,118 @@ works; see `.env.example`). Real environment variables win over the file.
 | `ARTEMIS_CHECK_CRON` | `0 8,14,20 * * *` | When Artemis's own beat reads DLQ, ExpiryQueue and memory: every day at 08:00, 14:00 and 20:00, on the clock of the machine running Healthcheck. |
 | `ARTEMIS_MEMORY_DANGER_PERCENT` | `50` | At or above this share of its heap in use (e.g. 2 GB of 4 GB), the Artemis report becomes a red danger warning. |
 | `HEALTHCHECK_DATA_DIR` | `server/data` | Where the SQLite database, the generated SSH keypair, and `master.key` live. Change this if you want the data directory somewhere other than inside the repo. |
-| `HEALTHCHECK_PASSWORD` | *(none — auth currently disabled)* | Reserved for re-enabling the basic-auth gate in `server/src/middleware/auth.ts` if you ever expose this beyond localhost. |
+| `SESSION_IDLE_HOURS` | `8` | A signed-in session ends after this long without use. |
+| `SESSION_MAX_HOURS` | `24` | ...and after this long in any case, so everyone signs in at least once a day. |
+| `LOGIN_MAX_ATTEMPTS` | `5` | Wrong passwords in a row before an account is locked. |
+| `LOGIN_LOCK_MINUTES` | `15` | How long the lock lasts (an admin can unlock it sooner). |
+| `TEMP_PASSWORD_HOURS` | `24` | How long a temporary password (new account, admin reset) works. |
+| `PUBLIC_URL` | `http://localhost:4000` | The address people open Healthcheck at. The one-time links printed by `npm run reset-password` start with it. |
+| `RESET_LINK_MINUTES` | `30` | How long such a link works. |
+| `COOKIE_SECURE` | `false` | Set to `true` when Healthcheck is served over HTTPS, so the sign-in cookie is only ever sent encrypted. |
 
 **Do not delete the data directory** (`server/data` by default) — it holds every
 server, catalog entry, job history, and the SSH key that's already
 installed on your servers. There's no undo.
 
 ## 3. Using it
+
+### Signing in
+
+Everyone signs in with their own username and password. Every run records who started it, and **Recent
+activity** shows "by &lt;username&gt;".
+
+- **First time:** with no accounts yet, Healthcheck opens on **Create the first admin**. That account
+  adds everyone else. Add a second admin soon (see *Forgot password* below).
+- **Adding people** (admins, **Users** in the sidebar): **Add user** with a name, a username and **what
+  they can do** (see *Permissions* below). Healthcheck shows a **temporary password once**. Pass it on
+  privately. It works for 24 hours (`TEMP_PASSWORD_HOURS`), and at the first sign-in the person must choose
+  their own password before anything else.
+
+**Permissions.** Everyone can view everything: servers, statuses, runs, alerts and Artemis readings. Each
+action needs its own permission:
+
+| Group | Permission | Allows |
+|---|---|---|
+| Run services | **Start All** / **Restart All** / **Stop All** | That button on a server, and on several servers at once from the overview |
+| | **Start / Restart / Stop a service** | Those buttons for one service |
+| Look closer | **Run checks** | Check now, Test connection, Artemis Check now |
+| | **Read logs** | Open a service's log (logs can contain sensitive data) |
+| Configure | **Manage servers** | Add a server, stop watching it, change its list of services (Find installed software, Watch it, Remove from this list) |
+| | **Edit the software catalog** / **Edit conditions** | Change those pages (without it they're view-only) |
+| Administer | **Manage users** | The Users page. Having it makes someone an **admin**. |
+
+Three presets fill the boxes in one click, and any box can be changed afterwards ("Custom"):
+- **Viewer:** nothing, so view only. For managers.
+- **Operator:** everything under *Run services* and *Look closer*.
+- **Admin:** everything.
+
+Change someone's name or permissions with **Edit** next to their name. It takes effect on their next click,
+with no need to sign in again.
+
+Enforcement:
+- **The server checks every action** against one rule table. A change that isn't listed there is refused
+  by default.
+- **In the page,** actions you can't use are greyed out, saying "You don't have permission for this. Ask an
+  admin."
+- **Run questions** (Try again / Roll back …) can only be answered by someone allowed to start that kind of
+  run.
+- **Nobody can take Manage users away from themselves**, and Healthcheck always keeps at least one active
+  admin.
+
+**Change password:** at the bottom of the sidebar. It asks for the current password. Your other signed-in
+browsers are signed out.
+
+**Forgot password.** No email server is needed: everything works on a market's own network.
+- **Everyone: ask an admin.** The admin clicks **Reset password** next to your name. That gives a new
+  temporary password, unlocks the account, and signs you out everywhere. You choose a new password at
+  sign-in.
+- **An admin:** another admin resets it the same way. That's why the Users page asks for a second admin
+  while there's only one.
+- **No other admin to ask:** someone with access to the machine Healthcheck runs on runs this in the
+  Healthcheck folder:
+  ```bash
+  npm run reset-password -- <username>
+  ```
+  It prints a **one-time link**. Open it in a browser, choose a new password, and you're signed in.
+  - **Lifetime:** the link works once, for 30 minutes (`RESET_LINK_MINUTES`). Running the command again
+    cancels the earlier link.
+  - **Address:** the link starts with `PUBLIC_URL`. Set it to the address people use for Healthcheck.
+  - **What else it does:** it unlocks and enables the account. If no other active admin exists, it also
+    gives that account every permission. Once used, every other session of that account is signed out.
+  - **Why the machine:** anyone who can run commands there already controls Healthcheck's data. So the
+    machine is the proof of identity when there's no email. Keycloak (`kc.sh bootstrap-admin`) and Grafana
+    (`grafana cli admin reset-admin-password`) recover their admins the same way.
+  - **Built code:** it runs the built code, like `npm start`, so run `npm run build` first after an update.
+  - **Storage:** only a hash of each link is kept.
+- **Users page, also:** **Unlock** a locked account, **Edit** (name and permissions), **Disable** /
+  **Enable**, and **Recent sign-in activity**.
+  - **Disable:** disabled people are signed out and can't sign in. Nobody can disable themselves.
+  - **Recent sign-in activity:** sign-ins, wrong passwords, lockouts, changes and resets, with who and from
+    where.
+
+**Password rules:**
+- **At least 12 characters.** Any characters work, spaces included; symbols aren't required. A few
+  unrelated words make a good one.
+- **Refused:** common passwords ("password123", "qwerty…"), the username or your name, the product's own
+  words ("vodafone…", "healthcheck…"), repeats and simple sequences.
+- **No forced periodic changes.** You change it when you want or when it may be known.
+
+These rules follow NIST SP 800-63B. The form shows the rules as you type; the server checks them again.
+
+How it's protected:
+- **Storage:** passwords are stored only as **scrypt** hashes with a unique salt each. They're never stored
+  in plain text, never logged, and never sent back.
+- **Session cookie:** the session is a random 256-bit token in an `HttpOnly`, `SameSite=Strict` cookie, so
+  page scripts can't read it and other sites can't use it. The database keeps only a SHA-256 of the token.
+- **New token on every sign-in**, and sign-out deletes the session on the server.
+- **Session end:** after 8 hours idle or 24 hours in total.
+- **Lockout:** **5 wrong passwords lock the account for 15 minutes.**
+- **No username guessing:** an unknown username gets the same message, takes the same time, and locks the
+  same way, so the replies never reveal which usernames exist.
+- **Per computer:** one address gets at most 30 failures per 15 minutes.
+- **CSRF:** every change must carry a header that another website can't add, so a malicious page can't act
+  in your name.
+- **Temporary passwords** are 16 random characters, expire, and must be replaced at first use.
 
 ### Servers
 
@@ -642,10 +747,11 @@ lines, colours errors/warnings, and has a **filter** box (matches highlighted), 
 - SSH private keys are generated locally and never leave the data directory;
   only the *public* key is ever sent anywhere (appended to the target server's
   `authorized_keys`).
-- The web UI currently has **no login** (disabled per request). It grants
-  remote shell execution across every configured server — do not expose this
-  beyond localhost/a trusted LAN without re-enabling auth (see
-  `HEALTHCHECK_PASSWORD` above).
+- Everyone signs in (see *Signing in*). The tool still grants remote control
+  of every configured server, so keep it on localhost or a trusted LAN. If you
+  expose it more widely, serve it over **HTTPS** and set `COOKIE_SECURE=true`:
+  over plain HTTP, passwords and the session cookie cross the network
+  unencrypted.
 
 ## 5. Project layout
 

@@ -1,14 +1,19 @@
 import { useState } from 'react';
-import { Routes, Route, Link, NavLink, Navigate, useNavigate } from 'react-router-dom';
+import { createPortal } from 'react-dom';
+import { Routes, Route, Link, NavLink, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import ServersDashboard from './pages/ServersDashboard';
 import ServerDetail from './pages/ServerDetail';
 import GroupRedirect from './pages/GroupRedirect';
 import SoftwareCatalogPage from './pages/SoftwareCatalogPage';
 import ConditionsPage from './pages/ConditionsPage';
 import JobDetailPage from './pages/JobDetailPage';
+import UsersPage from './pages/UsersPage';
 import TopBar from './components/TopBar';
 import BeatAlertModal from './components/BeatAlertModal';
-import { IconServer, IconCatalog, IconConditions, IconChevronLeft, IconChevronRight, IconPlus } from './components/Icons';
+import { IconServer, IconCatalog, IconConditions, IconChevronLeft, IconChevronRight, IconPlus, IconUsers } from './components/Icons';
+import { useAuth, useCan } from './auth/AuthContext';
+import { NO_PERMISSION, roleName } from './auth/permissions';
+import { ChangePasswordForm, ForcedChangePasswordPage, LoginPage, ResetPasswordPage, SetupPage } from './auth/AuthScreens';
 
 function loadCollapsed(): boolean {
   try {
@@ -20,9 +25,65 @@ function loadCollapsed(): boolean {
 
 const navClass = ({ isActive }: { isActive: boolean }) => `nav-item${isActive ? ' active' : ''}`;
 
+// Who decides what's on screen: sign-in states first, the app itself only once someone is signed in.
 export default function App() {
+  const { state, user, refresh } = useAuth();
+  const location = useLocation();
+  if (state === 'loading') return <div className="auth-page auth-loading">Loading…</div>;
+  // a one-time reset link (from npm run reset-password) works whether or not someone is signed in on this browser
+  if (location.pathname === '/reset-password') return <ResetPasswordPage />;
+  if (state === 'error')
+    return (
+      <div className="auth-page auth-loading">
+        <p>Healthcheck's server isn't answering.</p>
+        <button onClick={() => refresh()}>Try again</button>
+      </div>
+    );
+  if (state === 'setup') return <SetupPage />;
+  if (state === 'signedOut' || !user) return <LoginPage />;
+  if (user.must_change_password) return <ForcedChangePasswordPage />;
+  return <Shell />;
+}
+
+function ChangePasswordDialog({ onClose }: { onClose: () => void }) {
+  const { signedIn } = useAuth();
+  const [done, setDone] = useState(false);
+  return createPortal(
+    <div className="modal-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal auth-dialog" role="dialog" aria-labelledby="cp-title">
+        <div className="modal-header">
+          <h2 id="cp-title">Change password</h2>
+          <button onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+        </div>
+        {done ? (
+          <>
+            <div className="auth-info">Your password was changed. You've been signed out on every other browser.</div>
+            <button className="primary" onClick={onClose}>
+              Done
+            </button>
+          </>
+        ) : (
+          <ChangePasswordForm
+            onDone={(u) => {
+              signedIn(u);
+              setDone(true);
+            }}
+          />
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function Shell() {
   const [collapsed, setCollapsed] = useState(loadCollapsed);
+  const [changingPassword, setChangingPassword] = useState(false);
   const navigate = useNavigate();
+  const { user, signOut } = useAuth();
+  const can = useCan();
 
   function toggleCollapsed() {
     const next = !collapsed;
@@ -33,6 +94,13 @@ export default function App() {
       // per-viewer convenience only - fine if storage is unavailable
     }
   }
+
+  const initials = (user?.display_name ?? '?')
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
 
   return (
     <div className="app-shell">
@@ -73,14 +141,45 @@ export default function App() {
             <IconConditions />
             <span className="nav-label">Conditions</span>
           </NavLink>
+          {user?.is_admin && (
+            <NavLink to="/users" className={navClass} title="Users">
+              <IconUsers />
+              <span className="nav-label">Users</span>
+            </NavLink>
+          )}
         </nav>
 
         <div className="sb-foot">
           {!collapsed && <p>Manage another server from anywhere in the tool.</p>}
-          <button className="sb-add" onClick={() => navigate('/?add=1')} title="Add server" aria-label="Add server">
+          <button
+            className="sb-add"
+            onClick={() => navigate('/?add=1')}
+            title={can('manage_servers') ? 'Add server' : NO_PERMISSION}
+            aria-label="Add server"
+            disabled={!can('manage_servers')}
+          >
             <IconPlus size={15} />
             {!collapsed && <span>Add server</span>}
           </button>
+          <div className="sb-user" title={`${user?.display_name} (${user?.username})`}>
+            <span className="sb-avatar" aria-hidden="true">
+              {initials}
+            </span>
+            {!collapsed && (
+              <span className="sb-user-text">
+                <b>{user?.display_name}</b>
+                <span>{roleName(user?.permissions ?? [])}</span>
+              </span>
+            )}
+          </div>
+          <div className={`sb-user-actions${collapsed ? ' sb-user-actions-col' : ''}`}>
+            <button onClick={() => setChangingPassword(true)} title="Change password">
+              {collapsed ? 'Pwd' : 'Change password'}
+            </button>
+            <button onClick={() => signOut()} title="Sign out">
+              {collapsed ? 'Out' : 'Sign out'}
+            </button>
+          </div>
         </div>
       </aside>
       <main className="page">
@@ -92,10 +191,12 @@ export default function App() {
           <Route path="/software" element={<SoftwareCatalogPage />} />
           <Route path="/conditions" element={<ConditionsPage />} />
           <Route path="/jobs/:jobId" element={<JobDetailPage />} />
+          <Route path="/users" element={user?.is_admin ? <UsersPage /> : <Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
       <BeatAlertModal />
+      {changingPassword && <ChangePasswordDialog onClose={() => setChangingPassword(false)} />}
     </div>
   );
 }

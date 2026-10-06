@@ -7,6 +7,7 @@ import {
   useSoftwareDefinitions,
 } from '../api/hooks';
 import { IconConditions } from '../components/Icons';
+import { useCan } from '../auth/AuthContext';
 
 // Add new kinds of condition here (and in the shared ConditionType) and they show up in the
 // picker and the list without further UI work.
@@ -28,6 +29,7 @@ const emptyForm = { type: 'start_before', subject_id: '', target_id: '', note: '
 
 export default function ConditionsPage() {
   const { data: conditions } = useConditions();
+  const can = useCan();
   const { data: software } = useSoftwareDefinitions();
   const createCondition = useCreateCondition();
   const updateCondition = useUpdateCondition();
@@ -122,6 +124,8 @@ export default function ConditionsPage() {
         </div>
       </div>
 
+      {!can('manage_conditions') && <p className="perm-readonly">View only: you don't have permission to change the conditions.</p>}
+      <fieldset className="perm-fieldset" disabled={!can('manage_conditions')}>
       <button className="primary" onClick={openModal}>+ Add condition</button>
       {pageError && <p className="form-error" style={{ marginTop: 10 }}>{pageError}</p>}
 
@@ -161,6 +165,7 @@ export default function ConditionsPage() {
           })}
         </tbody>
       </table>
+      </fieldset>
 
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>

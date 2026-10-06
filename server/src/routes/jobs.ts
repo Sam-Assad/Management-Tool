@@ -25,6 +25,8 @@ function startsJob(begin: (req: Request) => Promise<{ id: number }>) {
   return asyncHandler(async (req, res) => {
     try {
       const job = await begin(req);
+      // who asked for it, for the activity list
+      sqlite.prepare('UPDATE job_runs SET started_by = ? WHERE id = ?').run(req.user?.username ?? null, job.id);
       res.status(202).json({ jobId: job.id });
     } catch (err: any) {
       if (err instanceof RefusedError) return res.status(409).json({ error: err.message });

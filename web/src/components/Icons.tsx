@@ -27,6 +27,15 @@ export const IconServer = () => (
   </Icon>
 );
 
+export const IconUsers = () => (
+  <Icon>
+    <circle cx="9" cy="8" r="3.2" />
+    <path d="M3.5 19.5c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5" />
+    <circle cx="17" cy="9" r="2.5" />
+    <path d="M15.5 14.6c2.4-.3 4.4 1.2 5 4.4" />
+  </Icon>
+);
+
 export const IconGroups = () => (
   <Icon>
     <rect x="3.5" y="3.5" width="7" height="7" rx="1.8" />

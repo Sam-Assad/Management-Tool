@@ -5,6 +5,7 @@ import {
   useUpdateSoftwareDefinition,
   useDeleteSoftwareDefinition,
 } from '../api/hooks';
+import { useCan } from '../auth/AuthContext';
 
 const empty = {
   name: '',
@@ -22,6 +23,7 @@ const empty = {
 
 export default function SoftwareCatalogPage() {
   const { data } = useSoftwareDefinitions();
+  const can = useCan();
   const createDef = useCreateSoftwareDefinition();
   const updateDef = useUpdateSoftwareDefinition();
   const deleteDef = useDeleteSoftwareDefinition();
@@ -77,6 +79,8 @@ export default function SoftwareCatalogPage() {
       </div>
       <h1>Software <span className="gradient-text">catalog</span></h1>
 
+      {!can('manage_catalog') && <p className="perm-readonly">View only: you don't have permission to change the catalog.</p>}
+      <fieldset className="perm-fieldset" disabled={!can('manage_catalog')}>
       <button className="primary" onClick={startCreate}>+ Add software</button>
 
       <table className="table" style={{ marginTop: 16 }}>
@@ -97,6 +101,7 @@ export default function SoftwareCatalogPage() {
           ))}
         </tbody>
       </table>
+      </fieldset>
 
       {showModal && (
         <div className="modal-overlay" onClick={closeModal}>

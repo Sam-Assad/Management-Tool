@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ALL as ALL_PERMISSIONS, OPERATOR as OPERATOR_PERMISSIONS } from '../auth/permissions.js';
 
 // Default: server/data inside the project, wherever the app is started from (the folder is in .gitignore).
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -130,6 +131,59 @@ CREATE TABLE IF NOT EXISTS artemis_checks (
 
 CREATE INDEX IF NOT EXISTS idx_artemis_checks_pair ON artemis_checks(server_id, software_id, id);
 
+-- People who can sign in. Passwords are stored only as scrypt hashes (see auth/passwords.ts).
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  display_name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  disabled INTEGER NOT NULL DEFAULT 0,
+  -- set by an admin reset / new account: the next sign-in must choose a new password
+  must_change_password INTEGER NOT NULL DEFAULT 0,
+  temp_password_expires_at TEXT,
+  failed_attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until TEXT,
+  password_changed_at TEXT NOT NULL,
+  last_login_at TEXT,
+  created_at TEXT NOT NULL
+);
+
+-- Signed-in browsers. Only a SHA-256 of the cookie's token is kept, so a copy of this table can't sign anyone in.
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  ip TEXT,
+  user_agent TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+-- One-time reset links from "npm run reset-password" (an admin who forgot their password). Only a SHA-256 of
+-- the link's token is kept; each works once, for a short time.
+CREATE TABLE IF NOT EXISTS password_resets (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  ip TEXT
+);
+
+-- Sign-ins, failures, password changes and resets, user changes: who / what / when.
+CREATE TABLE IF NOT EXISTS auth_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  event TEXT NOT NULL,
+  username TEXT,
+  actor TEXT,
+  ip TEXT,
+  detail TEXT
+);
+
 CREATE TABLE IF NOT EXISTS app_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -151,6 +205,14 @@ ensureColumn('software_definitions', 'default_rank', 'INTEGER');
 ensureColumn('job_runs', 'awaiting', 'TEXT');
 // JSON array of reports the run shows the operator as a popup, without pausing (e.g. Artemis after a start)
 ensureColumn('job_runs', 'notices', 'TEXT');
+// who started the run (username), for the activity list
+ensureColumn('job_runs', 'started_by', 'TEXT');
+// what each person may do (JSON array of permission names, see auth/permissions.ts). Accounts from before
+// permissions existed: admins get everything, everyone else the operator set they effectively had.
+ensureColumn('users', 'permissions', 'TEXT');
+sqlite
+  .prepare('UPDATE users SET permissions = CASE WHEN is_admin = 1 THEN ? ELSE ? END WHERE permissions IS NULL')
+  .run(JSON.stringify(ALL_PERMISSIONS), JSON.stringify(OPERATOR_PERMISSIONS));
 
 export const dataDirPath = dataDir;
 

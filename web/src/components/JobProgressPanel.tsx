@@ -3,6 +3,18 @@ import { api } from '../api/client';
 import InfoTip from './InfoTip';
 import DecisionModal, { type Awaiting, type Choice } from './DecisionModal';
 import ArtemisNoticeModal, { type JobNotice } from './ArtemisNoticeModal';
+import { useCan } from '../auth/AuthContext';
+import type { Permission } from '../auth/permissions';
+
+const JOB_PERMISSION: Record<string, Permission> = {
+  start_all: 'start_all',
+  restart_all: 'restart_all',
+  stop_all: 'stop_all',
+  start_one: 'start_one',
+  restart_one: 'restart_one',
+  stop_one: 'stop_one',
+  scan: 'run_checks',
+};
 
 // reports already closed in this browser (a page opened later doesn't show them again)
 const SEEN_KEY = 'hc-seen-notices';
@@ -111,10 +123,14 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear, serverName,
   const onUpdateRef = useRef(onUpdate);
   onUpdateRef.current = onUpdate;
   const [seen, setSeen] = useState<string[]>(loadSeen);
+  const can = useCan();
   const seenRef = useRef(seen);
   seenRef.current = seen;
   const report = (j: Job, seenIds: string[]) =>
-    onUpdateRef.current?.({ ...j, wantsPopup: Boolean(j.awaiting) || (j.notices ?? []).some((n) => !seenIds.includes(n.id)) });
+    onUpdateRef.current?.({
+      ...j,
+      wantsPopup: (Boolean(j.awaiting) && can(JOB_PERMISSION[j.kind] ?? 'manage_users')) || (j.notices ?? []).some((n) => !seenIds.includes(n.id)),
+    });
 
   function closeNotice(id: string) {
     const next = [...seenRef.current, id];
@@ -238,7 +254,9 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear, serverName,
   const minimized = questionKey !== null && questionKey === minimizedKey;
   // a report waits while a question is on screen; one at a time
   const notice = (job.notices ?? []).find((n) => !seen.includes(n.id));
-  const questionShown = Boolean(job.awaiting) && !minimized;
+  // only someone allowed to start this kind of run may answer its question (the server checks too)
+  const mayAnswer = can(JOB_PERMISSION[job.kind] ?? 'manage_users');
+  const questionShown = Boolean(job.awaiting) && mayAnswer && !minimized;
 
   return (
     <div className={`jp jp-${outcome}`}>
@@ -273,7 +291,13 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear, serverName,
         </span>
       </div>
 
-      {job.awaiting && !minimized && allowPopup && (
+      {job.awaiting && !mayAnswer && (
+        <div className="jp-decision">
+          <div className="jp-decision-title">{job.awaiting.summary}</div>
+          <div className="muted">Waiting for someone who's allowed to run {KIND_LABEL[job.kind] ?? job.kind} to answer.</div>
+        </div>
+      )}
+      {job.awaiting && mayAnswer && !minimized && allowPopup && (
         <DecisionModal
           awaiting={job.awaiting}
           deciding={deciding}
@@ -283,13 +307,13 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear, serverName,
         />
       )}
       {notice && allowPopup && !questionShown && <ArtemisNoticeModal notice={notice} onClose={() => closeNotice(notice.id)} />}
-      {job.awaiting && !minimized && !allowPopup && (
+      {job.awaiting && mayAnswer && !minimized && !allowPopup && (
         <div className="jp-decision">
           <div className="jp-decision-title">{job.awaiting.summary}</div>
           <div className="muted">Another run's question is open. This one pops up as soon as that one is answered.</div>
         </div>
       )}
-      {job.awaiting && minimized && (
+      {job.awaiting && mayAnswer && minimized && (
         <div className="jp-decision">
           <div className="jp-decision-title">{job.awaiting.summary}</div>
           <div className="jp-decision-actions">
@@ -316,7 +340,7 @@ export default function JobProgressPanel({ jobId, onUpdate, onClear, serverName,
                   {(!failed || isScan) && step.status !== 'blocked' && step.status !== 'running' && step.log_excerpt && (
                     <span className="jp-msg">{firstLine(step.log_excerpt)}</span>
                   )}
-                  {step.acceptable && (
+                  {step.acceptable && mayAnswer && (
                     <span className="with-info">
                       <button className="jp-mark" onClick={() => markStarted(step.id)}>
                         Mark as started

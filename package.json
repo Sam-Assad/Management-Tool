@@ -13,6 +13,7 @@
     "dev:web": "npm run dev --workspace web",
     "build": "npm run build --workspace shared && npm run build --workspace server && npm run build --workspace web",
     "start": "node server/dist/index.js",
+    "reset-password": "npm run reset-password --workspace server --",
     "defaults:export": "node server/dist/tools/defaults.js export",
     "defaults:reset": "node server/dist/tools/defaults.js reset"
   },

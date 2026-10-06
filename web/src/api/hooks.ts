@@ -26,6 +26,8 @@ export interface RecentJob {
   status: string;
   awaiting: string | null;
   error_message: string | null;
+  // username of whoever started it (older runs: null)
+  started_by: string | null;
   started_at: string;
   finished_at: string | null;
 }

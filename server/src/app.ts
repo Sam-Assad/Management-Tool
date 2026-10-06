@@ -10,12 +10,20 @@ import { jobsRouter } from './routes/jobs.js';
 import { logsRouter } from './routes/logs.js';
 import { heartbeatRouter } from './routes/heartbeat.js';
 import { conditionsRouter } from './routes/conditions.js';
+import { authRouter } from './routes/auth.js';
+import { csrfGuard, loadUser, requireUser, permissionGate } from './middleware/auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export function createApp() {
   const app = express();
   app.use(express.json());
+
+  // Sign-in: every /api request is checked for the CSRF header and its session; only the sign-in endpoints
+  // work without one. The web page itself (static files) loads without signing in, so it can show the form.
+  app.use('/api', csrfGuard, loadUser);
+  app.use('/api', authRouter);
+  app.use('/api', requireUser, permissionGate);
 
   app.use('/api/groups', groupsRouter);
   app.use('/api', serversRouter);
