@@ -6,7 +6,8 @@ start/restart/stop everything in the right order — gated on each step actually
 becoming healthy before the next one starts. You manage **servers**: each one is checked and
 controlled on its own.
 
-> **Installing on another machine?** See [DEPLOYMENT.md](DEPLOYMENT.md).
+> **Installing on another machine?** See [DEPLOYMENT.md](DEPLOYMENT.md) (Windows) or
+> [DEPLOYMENT-UBUNTU.md](DEPLOYMENT-UBUNTU.md) (Ubuntu, including moving from Windows).
 
 > This file is kept up to date as the tool changes. If you make or ask for a
 > change that affects setup, configuration, or day-to-day usage, update this

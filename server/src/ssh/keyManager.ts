@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { dataDirPath } from '../db/client.js';
+import { dataDirPath, sqlite } from '../db/client.js';
 
 const PRIVATE_KEY_PATH = path.join(dataDirPath, 'healthcheck_id_rsa');
 const PUBLIC_KEY_PATH = path.join(dataDirPath, 'healthcheck_id_rsa.pub');
@@ -48,4 +48,21 @@ export function ensureAppKeypair(): { privateKeyPath: string; publicKeyLine: str
     return { privateKeyPath: PRIVATE_KEY_PATH, publicKeyLine: generateKeypair() };
   }
   return { privateKeyPath: PRIVATE_KEY_PATH, publicKeyLine: fs.readFileSync(PUBLIC_KEY_PATH, 'utf8').trim() };
+}
+
+// Each server row keeps the key's full path, which belongs to the machine that added it (C:\...\server\data\...
+// on Windows, /opt/healthcheck/server/data/... on Ubuntu). After Healthcheck moves to another machine or folder
+// with its data folder copied across, that path no longer exists: the same file is then found by name in this
+// machine's data folder, and the row is corrected so it only happens once.
+export function privateKeyFor(server: { id: number; ssh_key_path: string }): Buffer {
+  if (fs.existsSync(server.ssh_key_path)) return fs.readFileSync(server.ssh_key_path);
+  const name = server.ssh_key_path.split(/[\\/]/).pop() ?? '';
+  const here = path.join(dataDirPath, name);
+  if (!name || !fs.existsSync(here)) {
+    throw new Error(
+      `Healthcheck's SSH key is missing: neither ${server.ssh_key_path} nor ${here} exists. Copy the data folder (with healthcheck_id_rsa) from the old machine to ${dataDirPath}.`,
+    );
+  }
+  sqlite.prepare('UPDATE servers SET ssh_key_path = ? WHERE ssh_key_path = ?').run(here, server.ssh_key_path);
+  return fs.readFileSync(here);
 }

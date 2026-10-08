@@ -1,7 +1,7 @@
 import { Client, type ConnectConfig } from 'ssh2';
-import fs from 'node:fs';
 import type { Server } from '@healthcheck/shared';
 import { decryptSecret } from '../crypto/secretBox.js';
+import { privateKeyFor } from './keyManager.js';
 
 type ServerWithSecret = Server & { ssh_passphrase_enc?: string | null };
 
@@ -31,7 +31,7 @@ function connect(server: ServerWithSecret): Promise<Client> {
     host: server.host,
     port: server.port,
     username: server.ssh_username,
-    privateKey: fs.readFileSync(server.ssh_key_path),
+    privateKey: privateKeyFor(server),
     readyTimeout: 10000,
     keepaliveInterval: 15000,
     keepaliveCountMax: 3,

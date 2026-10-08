@@ -4,6 +4,9 @@ This guide installs Healthcheck on a **Windows machine** (the "Healthcheck host"
 **Linux servers** over SSH. It takes about 15 minutes. For what the tool does and how to use it, see
 [README.md](README.md).
 
+> **Installing on Ubuntu, or moving a Windows installation to Ubuntu?** See
+> [DEPLOYMENT-UBUNTU.md](DEPLOYMENT-UBUNTU.md).
+
 ```
   Healthcheck host (Windows)                     Linux servers (one or many)
   ┌──────────────────────────┐   SSH (port 22   ┌───────────────────────────┐
@@ -188,13 +191,13 @@ Catalog** / **Conditions**; those local edits are kept when you upgrade.
 
 ## 7. Security
 
-- **There is no login.** The tool can start and stop production software, so by default it only listens
+- **Everyone signs in** with a named account and only gets the permissions an admin gave them (README,
+  *Signing in*). The tool can still start and stop production software, so by default it only listens
   on `127.0.0.1`. To let other PCs open it, set `HOST=0.0.0.0` **and** limit who can reach the port:
   ```powershell
   New-NetFirewallRule -DisplayName "Healthcheck" -Direction Inbound -Protocol TCP -LocalPort 4000 `
     -Action Allow -RemoteAddress 10.20.30.0/24
   ```
-  If it will be used by several people, ask for login to be enabled first.
 - The data folder contains the **private SSH key** that is installed on your servers. Protect it like a
   password: only the account that runs the service (and administrators) should be able to read it.
 - Never copy one customer's data folder to another customer's machine.
