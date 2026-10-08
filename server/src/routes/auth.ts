@@ -6,6 +6,9 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { hashPassword, verifyPassword, burnTime, passwordProblems, temporaryPassword, MIN_LENGTH } from '../auth/passwords.js';
 import { ALL, PERMISSIONS } from '../auth/permissions.js';
+import QRCode from 'qrcode';
+import { codeAt, currentStep, newSecret, otpauthUri, verifyCode } from '../auth/totp.js';
+import { decryptSecret, encryptSecret } from '../crypto/secretBox.js';
 import {
   COOKIE,
   resetTokenUser,
@@ -228,6 +231,120 @@ authRouter.post(
   }),
 );
 
+// ---- authenticator app (admins): their way back in if they forget their password ------------------------------
+// No email and no terminal: the 6-digit code from the app proves it's the admin, and knowing a username is useless
+// without it. Used only for "Forgot password", never at normal sign-in.
+const Code = z.string().trim().min(1).max(12);
+
+// The code is a real one, but from a time more than ~30 s away: the phone's or this server's clock is off.
+function clockOffMinutes(secret: string, code: string): number | null {
+  const typed = code.replace(/\s/g, '');
+  const now = currentStep();
+  for (let d = 2; d <= 20; d++) {
+    for (const s of [now - d, now + d]) if (codeAt(secret, s) === typed) return Math.round((d * 30) / 60) || 1;
+  }
+  return null;
+}
+const clockText = (minutes: number) =>
+  `The code is right, but the time on your phone and on the Healthcheck server are about ${minutes} minute${minutes === 1 ? '' : 's'} apart. Fix the clock that's wrong (both should set their time automatically), then try again.`;
+
+// Step 1: a new secret, shown as a QR code (and as text, to type in). Nothing changes until a code confirms it.
+authRouter.post(
+  '/auth/authenticator/start',
+  asyncHandler(async (req, res) => {
+    if (!req.user) return fail(res, 401, 'Please sign in.');
+    if (req.user.must_change_password) return fail(res, 403, 'Choose a new password first.', 'must_change_password');
+    if (!req.user.is_admin) return fail(res, 403, "The authenticator app is for admins. Anyone else asks an admin to reset their password.");
+    const secret = newSecret();
+    sqlite.prepare('UPDATE users SET totp_pending_enc = ? WHERE id = ?').run(encryptSecret(secret), req.user.id);
+    const uri = otpauthUri(secret, req.user.username);
+    res.json({
+      secret,
+      qr_svg: await QRCode.toString(uri, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }),
+      server_time: nowIso(),
+      replacing: req.user.has_authenticator,
+    });
+  }),
+);
+
+// Step 2: the code the app shows proves it was added. Replacing an existing one also asks for the password, so a
+// borrowed session can't swap in someone else's phone.
+authRouter.post(
+  '/auth/authenticator/confirm',
+  asyncHandler(async (req, res) => {
+    if (!req.user) return fail(res, 401, 'Please sign in.');
+    const { code, password } = z.object({ code: Code, password: Password.optional() }).parse(req.body);
+    const user = findUser(req.user.id)!;
+    if (!user.totp_pending_enc) return fail(res, 400, 'Start again: the QR code expired.', 'no_pending');
+    if (user.totp_secret_enc && !(password && (await verifyPassword(password, user.password_hash)))) {
+      return fail(res, 400, 'Your password is incorrect.', 'bad_current');
+    }
+    const secret = decryptSecret(user.totp_pending_enc);
+    const step = verifyCode(secret, code, null);
+    if (step === null) {
+      const off = clockOffMinutes(secret, code);
+      return fail(res, 400, off ? clockText(off) : "That code doesn't match. Type the 6-digit code the app shows for Healthcheck now.", off ? 'clock_off' : 'bad_code');
+    }
+    sqlite
+      .prepare('UPDATE users SET totp_secret_enc = totp_pending_enc, totp_pending_enc = NULL, totp_last_step = ?, totp_set_at = ? WHERE id = ?')
+      .run(step, nowIso(), user.id);
+    audit(user.totp_secret_enc ? 'authenticator_replaced' : 'authenticator_set_up', { username: user.username, ip: ipOf(req) });
+    res.json({ user: toPublic(findUser(user.id)!) });
+  }),
+);
+
+// From the sign-in page: username + the app's current code + a new password. Wrong codes count toward the same
+// lockout as wrong passwords, and the answer is the same whether the username exists, is an admin, or has an app.
+authRouter.post(
+  '/auth/recover-with-authenticator',
+  asyncHandler(async (req, res) => {
+    const body = z.object({ username: Username, code: Code, new_password: Password }).parse(req.body);
+    const ip = ipOf(req);
+    if (ipBlocked(ip)) return fail(res, 429, 'Too many failed attempts from this computer. Wait 15 minutes and try again.', 'ip_limited');
+    const user = findUserByName(body.username);
+    const key = body.username.trim().toLowerCase();
+    const lockedUntil = user ? (user.locked_until ? new Date(user.locked_until).getTime() : 0) : (phantom.get(key)?.lockedUntil ?? 0);
+    if (lockedUntil > Date.now()) {
+      return fail(res, 429, `Too many failed attempts for this account. Try again in ${lockedMinutes(lockedUntil)}.`, 'locked');
+    }
+    // the new password first, so a good code isn't spent on a too-weak password
+    if (user) {
+      const problems = passwordProblems(body.new_password, user.username, user.display_name);
+      if (problems.length) return fail(res, 400, problems.join(' '), 'weak_password');
+    }
+    const usable = user && toPublic(user).is_admin && !user.disabled && user.totp_secret_enc ? user : null;
+    const secret = usable ? decryptSecret(usable.totp_secret_enc!) : null;
+    const step = usable && secret ? verifyCode(secret, body.code, usable.totp_last_step) : null;
+    if (step === null) {
+      noteIpFailure(ip);
+      if (user) {
+        const attempts = user.failed_attempts + 1;
+        const until = attempts >= env.loginMaxAttempts ? new Date(Date.now() + env.loginLockMinutes * 60_000).toISOString() : null;
+        sqlite.prepare('UPDATE users SET failed_attempts = ?, locked_until = ? WHERE id = ?').run(until ? 0 : attempts, until, user.id);
+        audit(until ? 'account_locked' : 'authenticator_reset_failed', { username: user.username, ip });
+      } else {
+        const p = phantom.get(key) ?? { count: 0, lockedUntil: 0 };
+        p.count += 1;
+        phantom.set(key, p.count >= env.loginMaxAttempts ? { count: 0, lockedUntil: Date.now() + env.loginLockMinutes * 60_000 } : p);
+        audit('authenticator_reset_failed', { username: key.slice(0, 64), ip, detail: 'unknown username' });
+      }
+      // only someone holding the phone gets a code that is right apart from the clock, so saying so gives nothing away
+      const off = secret ? clockOffMinutes(secret, body.code) : null;
+      if (off) return fail(res, 401, clockText(off), 'clock_off');
+      return fail(res, 401, "That username and code don't match, or the code was already used. Wait for the next code and try again.", 'bad_code');
+    }
+    sqlite
+      .prepare(
+        'UPDATE users SET password_hash = ?, must_change_password = 0, temp_password_expires_at = NULL, failed_attempts = 0, locked_until = NULL, password_changed_at = ?, last_login_at = ?, totp_last_step = ? WHERE id = ?',
+      )
+      .run(await hashPassword(body.new_password), nowIso(), nowIso(), step, usable!.id);
+    destroyUserSessions(usable!.id);
+    audit('password_reset_by_authenticator', { username: usable!.username, ip });
+    signIn(req, res, usable!);
+    res.json({ user: toPublic(findUser(usable!.id)!) });
+  }),
+);
+
 // ---- users (admins only) ------------------------------------------------------------------------------------
 const PermissionList = z
   .array(z.string())
@@ -307,11 +424,17 @@ authRouter.patch(
         permissions: PermissionList.optional(),
         disabled: z.boolean().optional(),
         unlock: z.boolean().optional(),
+        // an admin who lost their phone: they set up the app again at their next sign-in
+        remove_authenticator: z.boolean().optional(),
       })
       .parse(req.body);
     const user = findUser(Number(req.params.id));
     if (!user) return fail(res, 404, 'No such user.');
     const self = user.id === req.user!.id;
+    if (self && body.remove_authenticator) return fail(res, 400, 'To use a different phone, choose Authenticator app at the bottom of the sidebar.');
+    if (body.remove_authenticator) {
+      sqlite.prepare('UPDATE users SET totp_secret_enc = NULL, totp_pending_enc = NULL, totp_last_step = NULL, totp_set_at = NULL WHERE id = ?').run(user.id);
+    }
     const dropsManage = body.permissions !== undefined && !body.permissions.includes('manage_users');
     if (self && body.disabled) return fail(res, 400, "You can't disable your own account.");
     if (self && dropsManage) return fail(res, 400, "You can't remove your own permission to manage users. Ask another admin.");

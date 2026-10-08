@@ -117,7 +117,8 @@ Everyone signs in with their own username and password. Every run records who st
 activity** shows "by &lt;username&gt;".
 
 - **First time:** with no accounts yet, Healthcheck opens on **Create the first admin**. That account
-  adds everyone else. Add a second admin soon (see *Forgot password* below).
+  adds everyone else. It sets up its authenticator app right away (see *Forgot password* below). Add a second
+  admin soon.
 - **Adding people** (admins, **Users** in the sidebar): **Add user** with a name, a username and **what
   they can do** (see *Permissions* below). Healthcheck shows a **temporary password once**. Pass it on
   privately. It works for 24 hours (`TEMP_PASSWORD_HOURS`), and at the first sign-in the person must choose
@@ -161,9 +162,27 @@ browsers are signed out.
 - **Everyone: ask an admin.** The admin clicks **Reset password** next to your name. That gives a new
   temporary password, unlocks the account, and signs you out everywhere. You choose a new password at
   sign-in.
-- **An admin:** another admin resets it the same way. That's why the Users page asks for a second admin
-  while there's only one.
-- **No other admin to ask:** someone with access to the machine Healthcheck runs on runs this in the
+- **An admin: with their authenticator app.** On the sign-in page: **Forgot your password?** → **Reset with my
+  authenticator app**. Enter your username, the 6-digit code the app shows for Healthcheck, and a new
+  password, and you're signed in.
+  - **Setting it up:** every admin must, at their first sign-in as an admin, before anything else. Scan a QR
+    code with Microsoft Authenticator or Google Authenticator and type one code to confirm. The app is only
+    used for Forgot password, never at normal sign-in.
+  - **Offline:** the phone and Healthcheck each compute the codes from a shared secret and the time, so
+    neither needs internet. Only installing the app on the phone does.
+  - **The clocks must agree:** Healthcheck accepts codes up to about 30 seconds off. If the phone and the
+    server are further apart, it says so instead of just refusing. The setup screen shows the server's time
+    to compare with the phone.
+  - **Safe against someone who knows the username:** without the phone's current code nothing happens. The
+    answer is the same for a wrong code, an unknown username or a non-admin, and each code works once.
+    Wrong codes count toward the same lockout as wrong passwords (5 tries, then 15 minutes).
+  - **New phone:** **Authenticator app** at the bottom of the sidebar. Scan the new code; it asks for your
+    password, and the old phone stops working.
+  - **Lost phone:** another admin clicks **Remove authenticator** next to your name on the Users page. You
+    set it up again at your next sign-in.
+  - **Storage:** the app's secret is stored encrypted with `master.key`.
+- **An admin with neither their password nor their phone:** another admin resets the password from the Users
+  page. If there's no other admin, someone with access to the machine Healthcheck runs on runs this in the
   Healthcheck folder:
   ```bash
   npm run reset-password -- <username>

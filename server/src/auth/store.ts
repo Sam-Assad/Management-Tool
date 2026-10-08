@@ -18,6 +18,10 @@ export interface UserRow {
   last_login_at: string | null;
   created_at: string;
   permissions: string | null;
+  totp_secret_enc: string | null;
+  totp_pending_enc: string | null;
+  totp_last_step: number | null;
+  totp_set_at: string | null;
 }
 
 // What the browser is told about a user - never the hash or lockout counters.
@@ -29,17 +33,23 @@ export interface PublicUser {
   is_admin: boolean;
   permissions: Permission[];
   must_change_password: boolean;
+  // admins recover a forgotten password with an authenticator app, so they must set one up before going on
+  has_authenticator: boolean;
+  needs_authenticator: boolean;
 }
 
 export const toPublic = (u: UserRow): PublicUser => {
   const permissions = parsePermissions(u.permissions);
+  const isAdmin = permissions.includes('manage_users');
   return {
     id: u.id,
     username: u.username,
     display_name: u.display_name,
-    is_admin: permissions.includes('manage_users'),
+    is_admin: isAdmin,
     permissions,
     must_change_password: Boolean(u.must_change_password),
+    has_authenticator: Boolean(u.totp_secret_enc),
+    needs_authenticator: isAdmin && !u.totp_secret_enc,
   };
 };
 

@@ -67,6 +67,7 @@ interface ListedUser {
   is_admin: boolean;
   permissions: Permission[];
   must_change_password: boolean;
+  has_authenticator: boolean;
   disabled: boolean;
   locked: boolean;
   last_login_at: string | null;
@@ -95,6 +96,10 @@ const EVENT_TEXT: Record<string, string> = {
   password_reset: 'password reset',
   reset_link_created: 'reset link made on the server',
   password_reset_by_link: 'chose a new password with a reset link',
+  authenticator_set_up: 'set up their authenticator app',
+  authenticator_replaced: 'moved their authenticator app to a new phone',
+  password_reset_by_authenticator: 'reset their password with their authenticator app',
+  authenticator_reset_failed: 'wrong authenticator code on Forgot password',
   user_created: 'account created',
   user_updated: 'account changed',
   setup_admin_created: 'first admin created',
@@ -253,8 +258,8 @@ export default function UsersPage() {
       {onlyAdmin && (
         <div className="alert users-note">
           <span>
-            <b>You're the only admin.</b> Give a second person <b>Manage users</b> (Edit → Admin), so either of you can
-            reset the other's password.
+            <b>You're the only admin.</b> If you ever lose both your password and your phone, only a command on the
+            Healthcheck server can let you back in. Add a second admin (Edit → Admin), so you can help each other.
           </span>
         </div>
       )}
@@ -283,6 +288,11 @@ export default function UsersPage() {
                   <td>
                     {roleName(u.permissions)}
                     {roleName(u.permissions) === 'Custom' && <div className="muted users-perm-count">{u.permissions.length} permissions</div>}
+                    {u.is_admin && (
+                      <div className={`users-perm-count ${u.has_authenticator ? 'muted' : 'users-warn'}`}>
+                        {u.has_authenticator ? 'Authenticator app set up' : 'Authenticator app: at next sign-in'}
+                      </div>
+                    )}
                   </td>
                   <td>
                     {u.disabled ? (
@@ -299,6 +309,19 @@ export default function UsersPage() {
                   <td className="users-actions">
                     {!self && !u.disabled && <button onClick={() => reset(u)}>Reset password</button>}
                     {u.locked && <button onClick={() => patch(u, { unlock: true })}>Unlock</button>}
+                    {!self && u.has_authenticator && (
+                      <button
+                        onClick={() =>
+                          patch(
+                            u,
+                            { remove_authenticator: true },
+                            `Remove ${u.display_name}'s authenticator app? Do this when they lost their phone. They'll set it up again on their next sign-in.`,
+                          )
+                        }
+                      >
+                        Remove authenticator
+                      </button>
+                    )}
                     <button onClick={() => setEditing(u)}>Edit</button>
                     {!self && (
                       <button

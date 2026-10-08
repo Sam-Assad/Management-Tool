@@ -34,18 +34,31 @@ export function loadUser(req: Request, _res: Response, next: NextFunction) {
   next();
 }
 
-// Everything under /api except the sign-in endpoints. A user who must choose a new password can do nothing else
-// until they have.
+// Steps a signed-in person must finish before anything else: a new password (after a temporary one), then, for
+// admins, an authenticator app (their way back in if they forget the password).
+function unfinished(req: Request, res: Response): boolean {
+  if (req.user!.must_change_password) {
+    res.status(403).json({ error: 'Choose a new password first.', code: 'must_change_password' });
+    return true;
+  }
+  if (req.user!.needs_authenticator) {
+    res.status(403).json({ error: 'Set up your authenticator app first.', code: 'authenticator_required' });
+    return true;
+  }
+  return false;
+}
+
+// Everything under /api except the sign-in endpoints.
 export function requireUser(req: Request, res: Response, next: NextFunction) {
   if (!req.user) return res.status(401).json({ error: 'Please sign in.' });
-  if (req.user.must_change_password) return res.status(403).json({ error: 'Choose a new password first.', code: 'must_change_password' });
+  if (unfinished(req, res)) return;
   next();
 }
 
 export function requirePermission(permission: Permission) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ error: 'Please sign in.' });
-    if (req.user.must_change_password) return res.status(403).json({ error: 'Choose a new password first.', code: 'must_change_password' });
+    if (unfinished(req, res)) return;
     if (!req.user.permissions.includes(permission)) return refuse(res, permission);
     next();
   };

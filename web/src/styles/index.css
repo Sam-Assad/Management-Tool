@@ -644,6 +644,28 @@ button.danger:hover { border-color: var(--bad); box-shadow: 0 4px 14px rgba(215,
 .perm-dialog-fields { display: grid; grid-template-columns: minmax(0, 360px); gap: 12px; }
 .perm-dialog-fields label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; font-weight: 600; }
 .users-note { background: #f7f8fa; color: #3a3f46; }
+.users-warn { color: #c0121a; font-weight: 600; }
+.auth-secondary { width: 100%; margin: 12px 0 2px; padding: 11px 14px; font-weight: 600; }
+.sb-small-link {
+  width: 100%; padding: 5px 8px; font-size: 11.5px; background: transparent; box-shadow: none; border: none;
+  color: var(--sidebar-muted); text-decoration: underline;
+}
+.sb-small-link:hover { background: none; transform: none; box-shadow: none; color: var(--accent); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* authenticator app setup */
+.totp { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
+.totp-steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 14px; font-size: 14.5px; line-height: 1.5; }
+.totp-steps li::marker { font-weight: 700; color: var(--accent-deep); }
+.totp-qr { width: 196px; height: 196px; margin: 10px 0 6px; padding: 8px; background: #fff; border: 1px solid var(--border); border-radius: 14px; }
+.totp-qr svg { display: block; width: 100%; height: 100%; }
+.totp-key { font-size: 13px; color: #4b5159; }
+.totp-key summary { cursor: pointer; color: var(--accent-deep); text-decoration: underline; }
+.totp-key p { margin: 6px 0 4px; }
+.totp-key code { display: inline-block; font-size: 14px; letter-spacing: 0.06em; background: #f7f8fa; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; user-select: all; word-break: break-all; }
+.totp-steps .auth-field { margin-top: 8px; }
+.auth-field input.totp-input { font-size: 22px; letter-spacing: 0.25em; text-align: center; max-width: 220px; font-variant-numeric: tabular-nums; }
+.totp-time { margin: 0; font-size: 12.5px; color: var(--muted-foreground); }
 
 /* permissions */
 .perm-readonly { margin: 4px 0 12px; font-size: 13.5px; color: #4b5159; background: #f1f2f4; border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; }

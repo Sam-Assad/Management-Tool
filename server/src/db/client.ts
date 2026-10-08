@@ -207,6 +207,12 @@ ensureColumn('job_runs', 'awaiting', 'TEXT');
 ensureColumn('job_runs', 'notices', 'TEXT');
 // who started the run (username), for the activity list
 ensureColumn('job_runs', 'started_by', 'TEXT');
+// an admin's authenticator app, for "Forgot password" (see auth/totp.ts): the secret, encrypted with master.key;
+// one being set up but not yet confirmed with a code; the last code's time step (each code works once); when
+ensureColumn('users', 'totp_secret_enc', 'TEXT');
+ensureColumn('users', 'totp_pending_enc', 'TEXT');
+ensureColumn('users', 'totp_last_step', 'INTEGER');
+ensureColumn('users', 'totp_set_at', 'TEXT');
 // what each person may do (JSON array of permission names, see auth/permissions.ts). Accounts from before
 // permissions existed: admins get everything, everyone else the operator set they effectively had.
 ensureColumn('users', 'permissions', 'TEXT');

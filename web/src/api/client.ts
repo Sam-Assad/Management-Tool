@@ -33,7 +33,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       // not JSON
     }
     if (res.status === 401 && !path.startsWith('/auth/')) window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
-    if (res.status === 403 && code === 'must_change_password') window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+    // a step to finish first (new password, authenticator app): the app re-reads who's signed in and shows it
+    if (res.status === 403 && (code === 'must_change_password' || code === 'authenticator_required')) window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
     throw new ApiError(message, res.status, code);
   }
   if (res.status === 204) return undefined as T;

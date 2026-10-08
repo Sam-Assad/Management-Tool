@@ -236,6 +236,11 @@ if you install it under a home folder.
       sudo timedatectl set-timezone <Region/City>   # list them with: timedatectl list-timezones
       sudo systemctl restart healthcheck
       ```
+- [ ] **Clock in sync.** Admins reset a forgotten password with codes from their authenticator app, which only
+      work while this machine's clock is within about 30 seconds of the phone's. `timedatectl` must say
+      `System clock synchronized: yes`. With no internet, point it at your company's time server: set
+      `NTP=<time-server>` in `/etc/systemd/timesyncd.conf`, then
+      `sudo systemctl restart systemd-timesyncd`.
 
 ---
 
@@ -310,5 +315,6 @@ On each Linux server, remove Healthcheck's key: `sed -i '/healthcheck-generated-
 | `EADDRINUSE` on start | Another program uses the port: `sudo ss -ltnp \| grep 4000`. Change `PORT` in `.env`. |
 | `.env` changes have no effect | Restart the service. The file must be `/opt/healthcheck/.env`, readable by the `healthcheck` group (4d). |
 | Artemis readings at the wrong hours | The machine's timezone (section 6). |
+| Authenticator codes refused, "the time on your phone and on the Healthcheck server are about N minutes apart" | This machine's clock isn't synchronized (section 6, *Clock in sync*), or the phone's time is set by hand. |
 | Page shows *Cannot GET /* or is blank | The web part isn't built: `cd /opt/healthcheck && sudo npm run build`. |
 | Service won't start after a moved `.env` | A Windows path is still in it (for example `HEALTHCHECK_DATA_DIR=D:\...`), or Windows line endings: run the `sed` line in 4a. |

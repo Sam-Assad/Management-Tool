@@ -10,6 +10,9 @@ export interface User {
   is_admin: boolean;
   permissions: Permission[];
   must_change_password: boolean;
+  has_authenticator: boolean;
+  // an admin without an authenticator app sets one up before anything else
+  needs_authenticator: boolean;
 }
 
 // can('stop_all') -> may the signed-in person do it? (The server checks again; this only greys out buttons.)
@@ -61,7 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onSignedOut = () => {
       setStatus((s) => {
-        if (s?.user && !s.user.must_change_password) setNotice('Your session has ended. Please sign in again.');
+        if (s?.user && !s.user.must_change_password && !s.user.needs_authenticator) setNotice('Your session has ended. Please sign in again.');
         return s;
       });
       queryClient.clear();
