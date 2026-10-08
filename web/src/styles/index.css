@@ -268,9 +268,10 @@ code, .mono { font-family: var(--font-mono); }
   .sidebar nav { flex-direction: row; flex-wrap: wrap; }
   .sb-section { display: none; }
   /* on a phone the footer keeps only who's signed in, Change password and Sign out, on one row */
-  .sb-foot { flex-direction: row; align-items: center; padding: 10px 0 0; }
+  .sb-foot { flex-direction: row; flex-wrap: wrap; align-items: center; padding: 10px 0 0; }
   .sb-foot p, .sb-foot .sb-add { display: none; }
-  .sb-user { flex: 1; }
+  .sb-user { flex: 1 1 150px; }
+  .sb-small-link { width: auto; flex: 0 0 auto; }
   .sb-user-actions { flex-direction: row; }
   /* in a column, margin:auto stops the page from stretching to the screen - it would size to its content */
   .page { width: 100%; box-sizing: border-box; padding: 16px 16px 72px; }

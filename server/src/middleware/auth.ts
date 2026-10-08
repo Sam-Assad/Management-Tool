@@ -73,7 +73,8 @@ const WHAT: Record<Permission, string> = {
   start_all: 'run Start All',
   restart_all: 'run Restart All',
   stop_all: 'run Stop All',
-  run_checks: 'run checks',
+  check_status: 'check the status of a server',
+  run_checks: 'test the connection or check Artemis',
   view_logs: 'read service logs',
   manage_servers: 'add, change or remove servers',
   manage_catalog: 'change the software catalog',
@@ -95,7 +96,7 @@ const RULES: { method: string; path: RegExp; permission: Permission | ((req: Req
   { method: 'POST', path: /^\/servers\/\d+\/software\/\d+\/start$/, permission: 'start_one' },
   { method: 'POST', path: /^\/servers\/\d+\/software\/\d+\/restart$/, permission: 'restart_one' },
   { method: 'POST', path: /^\/servers\/\d+\/software\/\d+\/stop$/, permission: 'stop_one' },
-  { method: 'POST', path: /^\/groups\/\d+\/scan$/, permission: 'run_checks' },
+  { method: 'POST', path: /^\/groups\/\d+\/scan$/, permission: 'check_status' },
   { method: 'POST', path: /^\/servers\/\d+\/artemis-check$/, permission: 'run_checks' },
   { method: 'POST', path: /^\/servers\/\d+\/test-connection$/, permission: 'run_checks' },
   // answering a run's question / vouching for a step: whoever may start that kind of run
@@ -125,7 +126,7 @@ const JOB_PERMISSION: Record<string, Permission> = {
   start_one: 'start_one',
   restart_one: 'restart_one',
   stop_one: 'stop_one',
-  scan: 'run_checks',
+  scan: 'check_status',
 };
 
 function jobPermission(jobId: number): Permission | null {

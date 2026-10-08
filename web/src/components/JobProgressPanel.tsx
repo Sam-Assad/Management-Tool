@@ -13,7 +13,7 @@ const JOB_PERMISSION: Record<string, Permission> = {
   start_one: 'start_one',
   restart_one: 'restart_one',
   stop_one: 'stop_one',
-  scan: 'run_checks',
+  scan: 'check_status',
 };
 
 // reports already closed in this browser (a page opened later doesn't show them again)

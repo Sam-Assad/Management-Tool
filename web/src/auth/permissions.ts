@@ -6,6 +6,7 @@ export type Permission =
   | 'start_all'
   | 'restart_all'
   | 'stop_all'
+  | 'check_status'
   | 'run_checks'
   | 'view_logs'
   | 'manage_servers'
@@ -28,7 +29,8 @@ export const PERMISSION_GROUPS: { title: string; items: { key: Permission; label
   {
     title: 'Look closer',
     items: [
-      { key: 'run_checks', label: 'Run checks', hint: 'Check now, Test connection, Artemis Check now.' },
+      { key: 'check_status', label: 'Check status', hint: 'Look at every service on a server now. Changes nothing.' },
+      { key: 'run_checks', label: 'Test connection and Artemis', hint: "Test the connection to a server, and read Artemis's queues and memory now." },
       { key: 'view_logs', label: 'Read logs', hint: "Open a service's log. Logs can contain sensitive data." },
     ],
   },
@@ -47,7 +49,7 @@ export const PERMISSION_GROUPS: { title: string; items: { key: Permission; label
 ];
 
 export const ALL: Permission[] = PERMISSION_GROUPS.flatMap((g) => g.items.map((i) => i.key));
-export const OPERATOR: Permission[] = ['start_one', 'restart_one', 'stop_one', 'start_all', 'restart_all', 'stop_all', 'run_checks', 'view_logs'];
+export const OPERATOR: Permission[] = ['start_one', 'restart_one', 'stop_one', 'start_all', 'restart_all', 'stop_all', 'check_status', 'run_checks', 'view_logs'];
 
 export const PRESETS: { id: string; label: string; hint: string; permissions: Permission[] }[] = [
   { id: 'viewer', label: 'Viewer', hint: 'Sees everything, changes nothing. For managers.', permissions: [] },

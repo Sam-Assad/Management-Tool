@@ -145,6 +145,13 @@ const LOCKED = 'Something is already running on this server - wait for it to fin
 // ---- Plain-language view of each state ---------------------------------------------------------
 // working = green, has a problem = red, stopped (nothing wrong, just not running) = gray
 type Tone = 'ok' | 'bad' | 'stopped' | 'busy' | 'idle';
+// the count tiles in the status box, always in this order so the eye learns where to look
+const TILES: { tone: Tone; label: string; onlyWhenAny?: boolean }[] = [
+  { tone: 'bad', label: 'With a problem' },
+  { tone: 'ok', label: 'Running' },
+  { tone: 'stopped', label: 'Stopped' },
+  { tone: 'busy', label: 'Starting or stopping', onlyWhenAny: true },
+];
 type GroupId = 'datasource_down' | 'not_ready' | 'credential_expired' | 'failed' | 'unreachable' | 'stopped' | 'busy' | 'working' | 'idle';
 
 const STATE_VIEW: Record<string, { label: string; tone: Tone; group: GroupId }> = {
@@ -449,13 +456,22 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
   const otherGroups = groups.filter((g) => g.members[0].view.tone !== 'bad');
   const alsoStopped = counts.stopped === 0 ? '' : counts.stopped === 1 ? ' One more is stopped.' : ` ${counts.stopped} more are stopped.`;
 
+  // "Artemis, WildFly, goal-backend and 5 more": the services with a problem, in the order of the list below
+  const problemNames = problemGroups.flatMap((g) => g.members.map((m) => m.name));
+  const namedProblems =
+    problemNames.length <= 3
+      ? problemNames.length === 1
+        ? problemNames[0]
+        : `${problemNames.slice(0, -1).join(', ')} and ${problemNames[problemNames.length - 1]}`
+      : `${problemNames.slice(0, 3).join(', ')} and ${problemNames.length - 3} more`;
+
   const verdict =
     total === 0
       ? { tone: 'idle', title: 'Nothing to watch here yet', text: "Healthcheck hasn't found any of the platform's software on this server. Use Find installed software below to look again." }
       : counts.bad > 0
         ? {
             tone: 'bad',
-            title: counts.bad === 1 ? `1 of ${total} services has a problem` : `${counts.bad} of ${total} services have a problem`,
+            title: `You have issues with ${namedProblems}.`,
             text: `The loyalty platform on ${server.name} isn't fully working. The list below says what's wrong with each one and what to do.${alsoStopped}`,
           }
         : counts.busy > 0
@@ -579,30 +595,49 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
             {technical && <span className="sv-tech-inline">{server.ssh_username}@{server.host}:{server.port}</span>}
           </p>
         </div>
-        <span className="with-info">
-          <button onClick={handleTestConnection} disabled={!can('run_checks')} title={can('run_checks') ? undefined : NO_PERMISSION}>
-            Test connection
-          </button>
-          <InfoTip>Checks that Healthcheck can still log in to this server.</InfoTip>
-        </span>
+        <div className="sv-head-actions">
+          <span className="with-info">
+            <button onClick={handleTestConnection} disabled={!can('run_checks')} title={can('run_checks') ? undefined : NO_PERMISSION}>
+              Test connection
+            </button>
+            <InfoTip>Checks that Healthcheck can still log in to this server.</InfoTip>
+          </span>
+          <span className="with-info">
+            <button className="sv-linkbtn sv-danger-link" onClick={handleRemoveServer} disabled={!can('manage_servers')} title={can('manage_servers') ? undefined : NO_PERMISSION}>
+              Stop watching this server
+            </button>
+            <InfoTip>Removes this server from Healthcheck. Nothing on the server itself is changed or stopped.</InfoTip>
+          </span>
+        </div>
       </header>
 
       <ArtemisBox serverId={server.id} />
 
+      {/* the verdict: one line, then one cell per service in the order of the list below */}
       <section className={`sv-verdict sv-verdict-${verdict.tone}`} aria-labelledby="sv-verdict-title">
-        <StateIcon tone={verdict.tone as Tone} size={44} />
-        <div className="sv-verdict-body">
-        <h2 id="sv-verdict-title" className="sv-verdict-title">{verdict.title}</h2>
-        <p className="sv-verdict-text">{verdict.text}</p>
-
-        <p className="sv-checked">
-          {status?.last_checked_at ? `Checked ${timeAgo(status.last_checked_at, now)}.` : 'First check pending.'}{' '}
-          {status?.interval_minutes ? `Refreshes on its own every ${status.interval_minutes} minutes.` : 'Refreshes on its own.'}{' '}
-          <button className="sv-linkbtn" onClick={() => runJob(() => scan.mutateAsync())} disabled={off('run_checks')} title={tip('run_checks', 'Looks at every service now. Changes nothing.')}>
-            Check now
-          </button>
-        </p>
+        <div className="sv-verdict-top">
+          <h2 id="sv-verdict-title" className="sv-verdict-title">
+            {verdict.title}
+          </h2>
+          <p className="sv-checked">
+            <span>{status?.last_checked_at ? `Checked ${timeAgo(status.last_checked_at, now)}` : 'Not checked yet'}</span>
+            <span className="sv-checked-next">
+              {status?.interval_minutes ? `Checks again on its own every ${status.interval_minutes} minutes` : 'Checks again on its own'}
+            </span>
+          </p>
         </div>
+        {total > 0 ? (
+          <ul className="sv-tiles">
+            {TILES.filter((t) => !t.onlyWhenAny || counts[t.tone] > 0).map((t) => (
+              <li key={t.tone} className={`sv-tile sv-tile-${t.tone}${counts[t.tone] === 0 ? ' sv-tile-zero' : ''}`}>
+                <b>{counts[t.tone]}</b>
+                <span>{t.label}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="sv-verdict-text">{verdict.text}</p>
+        )}
       </section>
 
       <div className="sv-bulk">
@@ -636,6 +671,20 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
               Stop All
             </button>
             <InfoTip>Stops every service, one at a time, in a safe order: what sits on top of another service is stopped first.</InfoTip>
+          </span>
+          <span className="sv-bulk-sep" aria-hidden="true" />
+          <span className="with-info">
+            <button className="sv-check" onClick={() => runJob(() => scan.mutateAsync())} disabled={off('check_status')} title={tip('check_status')}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M20 11a8 8 0 1 0-2.3 5.7" />
+                <path d="M20 4v7h-7" />
+              </svg>
+              Check status
+            </button>
+            <InfoTip>
+              Looks at every service on this server now and updates the list. Changes nothing. Healthcheck also does this on
+              its own every {status?.interval_minutes ?? 30} minutes.
+            </InfoTip>
           </span>
       </div>
 
@@ -710,12 +759,6 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
           />
           Show technical details
         </label>
-        <span className="with-info sv-foot-end">
-          <button className="sv-linkbtn sv-danger-link" onClick={handleRemoveServer} disabled={!can('manage_servers')} title={can('manage_servers') ? undefined : NO_PERMISSION}>
-            Stop watching this server
-          </button>
-          <InfoTip>Removes this server from Healthcheck. Nothing on the server itself is changed or stopped.</InfoTip>
-        </span>
       </footer>
 
       {logSoftwareId && (

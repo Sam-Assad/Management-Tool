@@ -131,7 +131,8 @@ action needs its own permission:
 |---|---|---|
 | Run services | **Start All** / **Restart All** / **Stop All** | That button on a server, and on several servers at once from the overview |
 | | **Start / Restart / Stop a service** | Those buttons for one service |
-| Look closer | **Run checks** | Check now, Test connection, Artemis Check now |
+| Look closer | **Check status** | The **Check status** button on a server (looks at every service now; changes nothing) |
+| | **Test connection and Artemis** | Test connection, and Artemis **Check now** |
 | | **Read logs** | Open a service's log (logs can contain sensitive data) |
 | Configure | **Manage servers** | Add a server, stop watching it, change its list of services (Find installed software, Watch it, Remove from this list) |
 | | **Edit the software catalog** / **Edit conditions** | Change those pages (without it they're view-only) |
@@ -253,9 +254,16 @@ and the other servers still go ahead. Leaving the page and coming back shows the
 
 The server page is written so that someone who isn't technical can read it:
 
-- **A headline box at the top** says in one sentence whether the platform on that server works ("Everything
-  is working", or "11 of 20 services have a problem", or "2 of 20 services are stopped"), when it was last checked, and has a **Check now**
-  link. **Start All / Restart All / Stop All** sit right under it.
+- **A status box at the top:**
+  - **One sentence** says what's wrong, naming the services: "You have issues with Artemis, Keycloak, WildFly
+    (JBoss) and 6 more." With no problems it says "Everything is working", or "2 of 20 services are stopped".
+    When it was last checked is on the right.
+  - **Three count tiles**, always in the same order: **With a problem** (red), **Running** (green) and
+    **Stopped** (grey). A tile at zero turns pale. A fourth, **Starting or stopping**, appears only while
+    something is.
+- **Right under it:** **Start All / Restart All / Stop All**, then **Check status**, set a little apart because
+  it changes nothing.
+- **Next to the server's name:** **Test connection** and **Stop watching this server**.
 - **Below, services are grouped by what's wrong**, problems first, each group with a plain heading and one
   sentence on what to do: *Can't reach the database*, *Can't receive traffic*, *Database password expired*, *Stopped with an error*,
   *Couldn't be checked*, *Stopped*, *In progress*, then *Working normally* and *Not checked yet*.
@@ -264,8 +272,9 @@ The server page is written so that someone who isn't technical can read it:
   list**) is under the **⋯** menu on the row.
 - **Show technical details** (bottom of the page) adds the SSH user/host/port, each service's start and stop
   step, and its raw state. The switch is remembered in that browser.
-- **Find installed software** and **Stop watching this server** are at the bottom too. Stopping watching makes
-  Healthcheck stop managing the server; nothing on the machine itself is changed or stopped.
+- **Find installed software** is at the bottom too.
+- **Stop watching this server** (next to the name) makes Healthcheck stop managing the server; nothing on
+  the machine itself is changed or stopped.
 
 Colours: the UI is red, white and gray, plus one status colour. **Working** is green (a green check
 mark), **has a problem** is red (a red "!"), **stopped** is gray (a gray square: nothing is broken, it just
@@ -503,7 +512,7 @@ When these run, and what happens if **even one** datasource fails or WildFly can
 |---|---|
 | **Start / Restart** of WildFly, after its log says it started | WildFly is **stopped immediately** and the step fails. |
 | **Start All** or **Start** while WildFly is **already running** | Checked anyway (systemd "running" isn't enough); same as above. |
-| **Check now** and the 30-minute **heartbeat** | WildFly is **flagged, not stopped** (stopping a production server in the background, perhaps over a short database blip, is left to a person). Here both checks always run, so the traffic check still runs when a datasource has already failed. When the heartbeat finds a problem, a red **"WildFly has issues, please check"** warning pops up on whatever page of the tool is open (see below). |
+| **Check status** and the 30-minute **heartbeat** | WildFly is **flagged, not stopped** (stopping a production server in the background, perhaps over a short database blip, is left to a person). Here both checks always run, so the traffic check still runs when a datasource has already failed. When the heartbeat finds a problem, a red **"WildFly has issues, please check"** warning pops up on whatever page of the tool is open (see below). |
 
 When all is well, the step's log says so, e.g. "All 13 datasources passed a connection test. Ready to
 receive traffic: WildFly says it's ready (/health/ready on 10.0.0.5:9990); it answers web requests on
@@ -670,7 +679,7 @@ How the orders are worked out:
     dependents are running) is simply allowed. Restart All / Stop All follow the conditions themselves.
   The message appears in a red box under Start All / Restart All / Stop All.
 - **One job at a time per server.** While a job is running — or paused waiting for your answer — the Start /
-  Restart / Stop buttons and **Check now** are disabled, and the server refuses another one, so two runs can
+  Restart / Stop buttons and **Check status** are disabled, and the server refuses another one, so two runs can
   never fight over the same components.
 - **Start / Restart / Stop** on a single row (its button, or its **⋯** menu) does the same for just that item.
   Note: systemd stops anything that `Requires=` the unit you stop (e.g. stopping a
@@ -678,7 +687,7 @@ How the orders are worked out:
   Healthcheck starts back up whatever was running before and got taken down that way,
   as extra steps in the same job. A single **Stop** does not — it stops what you asked
   for, plus whatever systemd takes down with it.
-- **Check now** (in the headline box) — read-only: looks at every component on the server and reports
+- **Check status** (after Stop All) — read-only: looks at every component on the server and reports
   which are running and which are not. Changes nothing.
 - **Find installed software** — looks for catalog components that are installed on the server
   but not in its list yet, and adds them (running or stopped). There is no way to add a
@@ -701,7 +710,7 @@ the button does.
 - **Only problems** (shown when something failed) hides the successful lines.
 - **Clear** dismisses the panel. It's only the last result — the grouped list below always shows each
   component's current state.
-- **Check now** is a report, not an operation: it finishes as "Done" even if components are
+- **Check status** is a report, not an operation: it finishes as "Done" even if components are
   stopped, and lists those as "not running" (or "database problem" for WildFly's datasources).
 
 ### Status and the heartbeat
@@ -724,7 +733,7 @@ listed under; the dashboard's chips use the shorter status names:
 
 A background **heartbeat** re-checks every component on every server every **30 minutes** (see
 `HEARTBEAT_INTERVAL_CRON`), and once shortly after the app starts. The line above the table shows the
-interval and when the last check ran. Status is also refreshed immediately by **Check now**, by any
+interval and when the last check ran. Status is also refreshed immediately by **Check status**, by any
 Start/Restart/Stop job (step by step while it runs), and right after a server is added or software is
 discovered. The page re-reads statuses every 15 seconds, so a new beat appears on its own — no reload.
 If a server is unreachable it's tried once per beat (not once per component), so a down host can't

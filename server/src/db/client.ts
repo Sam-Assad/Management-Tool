@@ -208,7 +208,8 @@ ensureColumn('job_runs', 'notices', 'TEXT');
 // who started the run (username), for the activity list
 ensureColumn('job_runs', 'started_by', 'TEXT');
 // an admin's authenticator app, for "Forgot password" (see auth/totp.ts): the secret, encrypted with master.key;
-// one being set up but not yet confirmed with a code; the last code's time step (each code works once); when
+// one being set up but not yet confirmed with a code; the last code's time step (each code works once); when it
+// was set up
 ensureColumn('users', 'totp_secret_enc', 'TEXT');
 ensureColumn('users', 'totp_pending_enc', 'TEXT');
 ensureColumn('users', 'totp_last_step', 'INTEGER');
@@ -219,6 +220,15 @@ ensureColumn('users', 'permissions', 'TEXT');
 sqlite
   .prepare('UPDATE users SET permissions = CASE WHEN is_admin = 1 THEN ? ELSE ? END WHERE permissions IS NULL')
   .run(JSON.stringify(ALL_PERMISSIONS), JSON.stringify(OPERATOR_PERMISSIONS));
+// "Check status" used to be part of "Run checks": whoever had that keeps being able to check status. Once only,
+// so an admin can take it away again afterwards.
+if (!sqlite.prepare("SELECT 1 FROM app_meta WHERE key = 'perm_check_status_split'").get()) {
+  sqlite.exec(`UPDATE users SET permissions = json_insert(permissions, '$[#]', 'check_status')
+    WHERE json_valid(permissions)
+      AND EXISTS (SELECT 1 FROM json_each(permissions) WHERE value = 'run_checks')
+      AND NOT EXISTS (SELECT 1 FROM json_each(permissions) WHERE value = 'check_status')`);
+  sqlite.prepare("INSERT INTO app_meta (key, value) VALUES ('perm_check_status_split', ?)").run(new Date().toISOString());
+}
 
 export const dataDirPath = dataDir;
 

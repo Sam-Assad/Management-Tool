@@ -9,6 +9,9 @@ export const PERMISSIONS = [
   'start_all',
   'restart_all',
   'stop_all',
+  // look at every service on a server now (Check status); changes nothing
+  'check_status',
+  // Test connection, Artemis Check now
   'run_checks',
   'view_logs',
   // configure
@@ -21,7 +24,7 @@ export const PERMISSIONS = [
 
 export type Permission = (typeof PERMISSIONS)[number];
 
-export const OPERATOR: Permission[] = ['start_one', 'restart_one', 'stop_one', 'start_all', 'restart_all', 'stop_all', 'run_checks', 'view_logs'];
+export const OPERATOR: Permission[] = ['start_one', 'restart_one', 'stop_one', 'start_all', 'restart_all', 'stop_all', 'check_status', 'run_checks', 'view_logs'];
 export const ALL: Permission[] = [...PERMISSIONS];
 
 export function isPermission(p: string): p is Permission {
