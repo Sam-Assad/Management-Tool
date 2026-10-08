@@ -27,6 +27,7 @@ import {
   notReadyDetail,
 } from '../scan/wildfly.js';
 import { isArtemis, checkArtemis, artemisSummary, saveArtemisCheck, type ArtemisReport } from '../scan/artemis.js';
+import { readHistoryForGroup } from '../scan/history.js';
 import type { SoftwareDefinition, Server as ServerRow } from '@healthcheck/shared';
 
 function nowIso() {
@@ -102,6 +103,8 @@ function finishJob(jobId: number, status: 'succeeded' | 'failed', errorMessage?:
     .run(status, nowIso(), errorMessage ?? null, jobId);
   sseHub.publish(jobId, { type: 'job', status });
   sseHub.close(jobId);
+  // record this run's starts and stops in the service history now, while it can still be matched to the run
+  readHistoryForGroup((sqlite.prepare('SELECT group_id FROM job_runs WHERE id = ?').get(jobId) as { group_id: number | null } | undefined)?.group_id ?? null);
 }
 
 function createStep(jobId: number, serverId: number, softwareId: number, action: string) {

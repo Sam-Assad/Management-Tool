@@ -27,6 +27,8 @@ import { size } from '../components/ArtemisNoticeModal';
 import { useCan } from '../auth/AuthContext';
 import { NO_PERMISSION, type Permission } from '../auth/permissions';
 import RowMenu from '../components/RowMenu';
+import ServiceHistory from '../components/ServiceHistory';
+import { intervalText } from '../api/hooks';
 import '../styles/server-page.css';
 import LogViewer from '../components/LogViewer';
 import LoadState from '../components/LoadState';
@@ -145,6 +147,10 @@ const LOCKED = 'Something is already running on this server - wait for it to fin
 // ---- Plain-language view of each state ---------------------------------------------------------
 // working = green, has a problem = red, stopped (nothing wrong, just not running) = gray
 type Tone = 'ok' | 'bad' | 'stopped' | 'busy' | 'idle';
+// a service in one of these states is running (Start greyed out) / not running (Stop greyed out)
+const RUNNING_STATES = new Set(['running', 'datasource_down', 'not_ready', 'starting']);
+const STOPPED_STATES = new Set(['stopped', 'failed', 'credential_expired', 'not_installed']);
+
 // the count tiles in the status box, always in this order so the eye learns where to look
 const TILES: { tone: Tone; label: string; onlyWhenAny?: boolean }[] = [
   { tone: 'bad', label: 'With a problem' },
@@ -300,6 +306,7 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
 
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
   const [logSoftwareId, setLogSoftwareId] = useState<number | null>(null);
+  const [historyFor, setHistoryFor] = useState<{ id: number; name: string } | null>(null);
   const [dismissedAlerts, setDismissedAlerts] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem('hc-dismissed-db-alerts') ?? '[]');
@@ -531,32 +538,35 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
           )}
         </div>
         <div className="sv-actions">
-          {down && (
-            <button
-              className="sv-start"
-              disabled={off('start_one')}
-              title={tip('start_one')}
-              onClick={() => runJob(() => startOne.mutateAsync({ serverId: server.id, softwareId: s.id }))}
-            >
-              Start
-            </button>
-          )}
-          {(s.state === 'datasource_down' || s.state === 'not_ready') && (
-            <button
-              className="sv-start"
-              disabled={off('restart_one')}
-              title={tip('restart_one')}
-              onClick={() => runJob(() => restartOne.mutateAsync({ serverId: server.id, softwareId: s.id }))}
-            >
-              Restart
-            </button>
-          )}
+          {/* the obvious next step is outlined in red: Start when it's down, Restart when it runs but doesn't work */}
+          <button
+            className={`sv-act${down ? ' sv-start' : ''}`}
+            disabled={off('start_one') || RUNNING_STATES.has(s.state)}
+            title={RUNNING_STATES.has(s.state) && can('start_one') ? "It's already running." : tip('start_one')}
+            onClick={() => runJob(() => startOne.mutateAsync({ serverId: server.id, softwareId: s.id }))}
+          >
+            Start
+          </button>
+          <button
+            className={`sv-act${s.state === 'datasource_down' || s.state === 'not_ready' ? ' sv-start' : ''}`}
+            disabled={off('restart_one')}
+            title={tip('restart_one')}
+            onClick={() => runJob(() => restartOne.mutateAsync({ serverId: server.id, softwareId: s.id }), `Restart ${s.name} on ${server.name}?`)}
+          >
+            Restart
+          </button>
+          <button
+            className="sv-act"
+            disabled={off('stop_one') || STOPPED_STATES.has(s.state)}
+            title={STOPPED_STATES.has(s.state) && can('stop_one') ? "It isn't running." : tip('stop_one')}
+            onClick={() => runJob(() => stopOne.mutateAsync({ serverId: server.id, softwareId: s.id }), `Stop ${s.name} on ${server.name}?`)}
+          >
+            Stop
+          </button>
           <RowMenu
             label={`More actions for ${s.name}`}
             items={[
-              { label: 'Start', disabled: off('start_one'), title: tip('start_one'), onSelect: () => runJob(() => startOne.mutateAsync({ serverId: server.id, softwareId: s.id })) },
-              { label: 'Restart', disabled: off('restart_one'), title: tip('restart_one'), onSelect: () => runJob(() => restartOne.mutateAsync({ serverId: server.id, softwareId: s.id })) },
-              { label: 'Stop', disabled: off('stop_one'), title: tip('stop_one'), onSelect: () => runJob(() => stopOne.mutateAsync({ serverId: server.id, softwareId: s.id })) },
+              { label: 'Show its history', onSelect: () => setHistoryFor({ id: s.id, name: s.name }) },
               { label: 'Show its log', disabled: !can('view_logs'), title: can('view_logs') ? undefined : NO_PERMISSION, onSelect: () => setLogSoftwareId(s.id) },
               {
                 label: 'Remove from this list',
@@ -622,7 +632,7 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
           <p className="sv-checked">
             <span>{status?.last_checked_at ? `Checked ${timeAgo(status.last_checked_at, now)}` : 'Not checked yet'}</span>
             <span className="sv-checked-next">
-              {status?.interval_minutes ? `Checks again on its own every ${status.interval_minutes} minutes` : 'Checks again on its own'}
+              {status?.interval_minutes ? `Checks again on its own every ${intervalText(status.interval_minutes)}` : 'Checks again on its own'}
             </span>
           </p>
         </div>
@@ -683,7 +693,7 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
             </button>
             <InfoTip>
               Looks at every service on this server now and updates the list. Changes nothing. Healthcheck also does this on
-              its own every {status?.interval_minutes ?? 30} minutes.
+              its own every {intervalText(status?.interval_minutes ?? 120)}.
             </InfoTip>
           </span>
       </div>
@@ -761,6 +771,9 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
         </label>
       </footer>
 
+      {historyFor && (
+        <ServiceHistory serverId={server.id} softwareId={historyFor.id} name={historyFor.name} serverName={server.name} onClose={() => setHistoryFor(null)} />
+      )}
       {logSoftwareId && (
         <LogViewer
           serverId={server.id}

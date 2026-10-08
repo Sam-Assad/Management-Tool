@@ -1,7 +1,6 @@
 import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { sqlite } from './client.js';
+import { env } from '../env.js';
 import { wouldCreateCycle } from '../orchestrator/ordering.js';
 
 // The software catalog and the conditions that ship with Healthcheck live in ONE file in the repository
@@ -15,12 +14,9 @@ import { wouldCreateCycle } from '../orchestrator/ordering.js';
 //  - one the customer deleted stays deleted; ones the customer created themselves are never touched.
 // "What was shipped before" is remembered in app_meta ('defaults_snapshot').
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-
+// HEALTHCHECK_DEFAULTS_FILE in the settings file; by default server/defaults/defaults.json
 export function defaultsFilePath(): string {
-  return process.env.HEALTHCHECK_DEFAULTS_FILE
-    ? path.resolve(process.env.HEALTHCHECK_DEFAULTS_FILE)
-    : path.resolve(here, '../../defaults/defaults.json');
+  return env.defaultsFile;
 }
 
 export const CATALOG_FIELDS = [

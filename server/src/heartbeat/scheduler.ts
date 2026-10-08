@@ -5,6 +5,7 @@ import { getConnection } from '../ssh/connectionManager.js';
 import { checkComponent, detectInstalled } from '../scan/detectors.js';
 import type { ComponentState } from '../scan/detectors.js';
 import { env } from '../env.js';
+import { readServiceHistory } from '../scan/history.js';
 import type { SoftwareDefinition, Server as ServerRow } from '@healthcheck/shared';
 
 const limit = pLimit(5);
@@ -98,6 +99,12 @@ export async function checkGroup(groupId: number) {
           } catch {
             // this server dropped mid-beat - skip discovery probes for it
           }
+        }
+        // starts / stops / crashes since the last beat, from systemd (one command for the whole server)
+        try {
+          await readServiceHistory(server, client);
+        } catch (err: any) {
+          console.error(`Service history for ${server.name} failed:`, err?.message ?? err);
         }
       })
     )

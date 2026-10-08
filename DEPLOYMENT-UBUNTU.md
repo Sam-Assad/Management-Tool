@@ -126,6 +126,7 @@ sudo cp -a /tmp/hc-move/data/. /var/lib/healthcheck/
 sudo cp /tmp/hc-move/.env /opt/healthcheck/.env
 sudo sed -i 's/\r$//' /opt/healthcheck/.env            # Windows line endings off
 rm -rf /tmp/hc-move
+cd /opt/healthcheck && sudo node server/dist/cli/settings.js   # adds any setting it lacks, keeps your values
 ```
 
 Each server row still remembers the key at its old Windows location (`C:\...\server\data\healthcheck_id_rsa`).
@@ -134,13 +135,17 @@ corrects the row.
 
 ### 4b. A fresh install
 
+Write the settings file (every setting at its default, with a comment on each):
+
 ```bash
-sudo cp /opt/healthcheck/.env.example /opt/healthcheck/.env
+cd /opt/healthcheck && sudo node server/dist/cli/settings.js
 ```
 
 ### 4c. Settings (both cases)
 
-Edit the file with `sudo nano /opt/healthcheck/.env`. These lines must be right on Ubuntu:
+All settings are in this one file, `/opt/healthcheck/.env`; Healthcheck reads nothing else. Each setting says
+what it does and its default, and **(recommended)** means keep the default. Edit it with
+`sudo nano /opt/healthcheck/.env`. These lines must be right on Ubuntu:
 
 ```ini
 HEALTHCHECK_DATA_DIR=/var/lib/healthcheck
@@ -282,11 +287,14 @@ cd /opt/healthcheck
 sudo git pull
 sudo npm ci
 sudo npm run build
+sudo node server/dist/cli/settings.js     # adds settings the new version brings, keeps your values
 sudo systemctl start healthcheck
 journalctl -u healthcheck -n 20 --no-pager
 ```
 
-The database updates itself on start, and `/var/lib/healthcheck` is never touched by an upgrade.
+The database updates itself on start, and `/var/lib/healthcheck` is never touched by an upgrade. (The
+settings line matters here: the `.env` file belongs to root, so Healthcheck itself can't add new settings to
+it. Without it a new setting simply uses its default, and the start-up log says so.)
 
 ---
 

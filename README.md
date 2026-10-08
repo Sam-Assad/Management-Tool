@@ -50,6 +50,11 @@ prerequisites of the deployment, not something Healthcheck sets up:
 3. **Every component installed as a systemd service** (`.service` unit) on the server — the unit
    files in `Services/` are the reference. Healthcheck does not install or convert anything: it
    detects, starts and stops through `systemctl` on the unit name.
+4. **For the full service history** (every start and stop, and who did it from a terminal): that user
+   must be able to read the system journal. On Rocky / RHEL a member of `wheel` or `adm` already can;
+   otherwise `sudo usermod -aG systemd-journal svc_user`. Check it as that user: `journalctl -n 1 _PID=1`
+   must print a line. Without it Healthcheck still works, with a shorter history (see
+   [Service history](#service-history)).
 
 ## 2. Install & run
 
@@ -71,16 +76,31 @@ npm start                    # serves the built UI + API from a single Node proc
 > file is saved. A restart marks any running Start / Restart / Stop All job as *Interrupted* (nothing is
 > stopped, but the run and any question it was asking are gone, and you have to start it again).
 
-### Environment variables (optional)
+### Settings: one file, `.env`
 
-Set these as real environment variables, or in a `.env` file in the project root (a `server/.env` also
-works; see `.env.example`). Real environment variables win over the file.
+Every setting is in **one file: `.env` in the Healthcheck folder** (next to `package.json`). Healthcheck reads
+it when it starts, so **restart Healthcheck after changing it**. The start-up log says which file it read.
+
+- **You never create it by hand.** At its first start Healthcheck writes it with every setting at its default.
+  Each setting has a comment saying what it does and its default, and **(recommended)** marks the defaults to
+  keep unless you have a reason. `npm run settings` does the same without starting Healthcheck, and tidies the
+  file after hand edits, keeping your values.
+- **Upgrades:** when a newer version brings a setting the file doesn't have yet, Healthcheck adds it at its
+  default. Your values stay.
+- **An empty value or a deleted line means the default.**
+- **It holds passwords** (`ARTEMIS_PASSWORD`), so it is in `.gitignore` and never committed. Keep it readable
+  only by Healthcheck's account.
+- A real environment variable with the same name wins over the file. That's only for a service manager or a
+  container that sets one; normally you just edit the file.
+
+The settings, as the file lists them:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `4000` | Port the API (and, in production, the UI) listens on. |
 | `HOST` | `127.0.0.1` | Interface to bind to. Change to a LAN IP if you need to reach it from another machine. |
-| `HEARTBEAT_INTERVAL_CRON` | `*/30 * * * *` | Cron expression for the background status check (the "heartbeat") — every 30 minutes by default. The "every N minutes" text on the server page follows it when it's in the `*/N * * * *` form. |
+| `HEARTBEAT_INTERVAL_CRON` | `0 */2 * * *` | Cron expression for the background status check (the "heartbeat") — every 2 hours by default, to keep SSH logins on the servers low. The "every …" text on the server page follows it in the `*/N * * * *` (minutes) and `0 */N * * *` (hours) forms. |
+| `SERVICE_HISTORY_DAYS` | `30` | How many days of service history (starts, stops, errors) to keep. |
 | `START_ATTEMPTS` | `3` | Start / Restart All: how many times to try a component that crashes on start before pausing to ask you. |
 | `START_RETRY_DELAY_S` | `5` | Seconds to wait between those attempts. |
 | `PORT_RELEASE_WAIT_S` | `30` | A start that fails because a port is already in use waits this long for the port to be released (a previous instance may still be shutting down) before it gives up and names who holds it. |
@@ -95,15 +115,16 @@ works; see `.env.example`). Real environment variables win over the file.
 | `ARTEMIS_INSTANCE` | `/Data/software/bin/loyalty-management-broker` | Only a fallback: the instance folder is normally read from the running broker's `-Dartemis.instance=`. |
 | `ARTEMIS_CHECK_CRON` | `0 8,14,20 * * *` | When Artemis's own beat reads DLQ, ExpiryQueue and memory: every day at 08:00, 14:00 and 20:00, on the clock of the machine running Healthcheck. |
 | `ARTEMIS_MEMORY_DANGER_PERCENT` | `50` | At or above this share of its heap in use (e.g. 2 GB of 4 GB), the Artemis report becomes a red danger warning. |
-| `HEALTHCHECK_DATA_DIR` | `server/data` | Where the SQLite database, the generated SSH keypair, and `master.key` live. Change this if you want the data directory somewhere other than inside the repo. |
+| `HEALTHCHECK_DATA_DIR` | `server/data` | Where the SQLite database, the generated SSH keypair, and `master.key` live. Change this if you want the data directory somewhere other than inside the repo. A relative path counts from the Healthcheck folder. |
 | `SESSION_IDLE_HOURS` | `8` | A signed-in session ends after this long without use. |
 | `SESSION_MAX_HOURS` | `24` | ...and after this long in any case, so everyone signs in at least once a day. |
 | `LOGIN_MAX_ATTEMPTS` | `5` | Wrong passwords in a row before an account is locked. |
 | `LOGIN_LOCK_MINUTES` | `15` | How long the lock lasts (an admin can unlock it sooner). |
 | `TEMP_PASSWORD_HOURS` | `24` | How long a temporary password (new account, admin reset) works. |
-| `PUBLIC_URL` | `http://localhost:4000` | The address people open Healthcheck at. The one-time links printed by `npm run reset-password` start with it. |
+| `PUBLIC_URL` | `http://localhost:<PORT>` | The address people open Healthcheck at. The one-time links printed by `npm run reset-password` start with it. |
 | `RESET_LINK_MINUTES` | `30` | How long such a link works. |
 | `COOKIE_SECURE` | `false` | Set to `true` when Healthcheck is served over HTTPS, so the sign-in cookie is only ever sent encrypted. |
+| `HEALTHCHECK_DEFAULTS_FILE` | `server/defaults/defaults.json` | The catalog and conditions file loaded at every start. Leave it empty. |
 
 **Do not delete the data directory** (`server/data` by default) — it holds every
 server, catalog entry, job history, and the SSH key that's already
@@ -267,9 +288,12 @@ The server page is written so that someone who isn't technical can read it:
 - **Below, services are grouped by what's wrong**, problems first, each group with a plain heading and one
   sentence on what to do: *Can't reach the database*, *Can't receive traffic*, *Database password expired*, *Stopped with an error*,
   *Couldn't be checked*, *Stopped*, *In progress*, then *Working normally* and *Not checked yet*.
-- **Each service row** has one button for the obvious next step (**Start** when it's down, **Restart** for
-  WildFly's database problem). Everything else (Start, Restart, Stop, **Show its log**, **Remove from this
-  list**) is under the **⋯** menu on the row.
+- **Each service row** has **Start**, **Restart** and **Stop**.
+  - **Red outline:** marks the obvious next step: Start when it's down, Restart when it runs but doesn't work
+    (database or traffic problem).
+  - **Greyed out:** Start when it's already running, Stop when it isn't.
+  - **Confirmation:** Restart and Stop ask first.
+  - **The ⋯ menu:** **Show its history**, **Show its log** and **Remove from this list**.
 - **Show technical details** (bottom of the page) adds the SSH user/host/port, each service's start and stop
   step, and its raw state. The switch is remembered in that browser.
 - **Find installed software** is at the bottom too.
@@ -512,7 +536,7 @@ When these run, and what happens if **even one** datasource fails or WildFly can
 |---|---|
 | **Start / Restart** of WildFly, after its log says it started | WildFly is **stopped immediately** and the step fails. |
 | **Start All** or **Start** while WildFly is **already running** | Checked anyway (systemd "running" isn't enough); same as above. |
-| **Check status** and the 30-minute **heartbeat** | WildFly is **flagged, not stopped** (stopping a production server in the background, perhaps over a short database blip, is left to a person). Here both checks always run, so the traffic check still runs when a datasource has already failed. When the heartbeat finds a problem, a red **"WildFly has issues, please check"** warning pops up on whatever page of the tool is open (see below). |
+| **Check status** and the 2-hourly **heartbeat** | WildFly is **flagged, not stopped** (stopping a production server in the background, perhaps over a short database blip, is left to a person). Here both checks always run, so the traffic check still runs when a datasource has already failed. When the heartbeat finds a problem, a red **"WildFly has issues, please check"** warning pops up on whatever page of the tool is open (see below). |
 
 When all is well, the step's log says so, e.g. "All 13 datasources passed a connection test. Ready to
 receive traffic: WildFly says it's ready (/health/ready on 10.0.0.5:9990); it answers web requests on
@@ -681,7 +705,7 @@ How the orders are worked out:
 - **One job at a time per server.** While a job is running — or paused waiting for your answer — the Start /
   Restart / Stop buttons and **Check status** are disabled, and the server refuses another one, so two runs can
   never fight over the same components.
-- **Start / Restart / Stop** on a single row (its button, or its **⋯** menu) does the same for just that item.
+- **Start / Restart / Stop** on a single row does the same for just that item.
   Note: systemd stops anything that `Requires=` the unit you stop (e.g. stopping a
   rules selector also stops `rule-interpreter`). After a single **Restart**,
   Healthcheck starts back up whatever was running before and got taken down that way,
@@ -731,13 +755,13 @@ listed under; the dashboard's chips use the shorter status names:
 | **Couldn't be checked** | **Unreachable** | the server couldn't be reached over SSH |
 | **Not checked yet** | **Not checked yet** | no status recorded yet |
 
-A background **heartbeat** re-checks every component on every server every **30 minutes** (see
+A background **heartbeat** re-checks every component on every server every **2 hours** (see
 `HEARTBEAT_INTERVAL_CRON`), and once shortly after the app starts. The line above the table shows the
 interval and when the last check ran. Status is also refreshed immediately by **Check status**, by any
 Start/Restart/Stop job (step by step while it runs), and right after a server is added or software is
 discovered. The page re-reads statuses every 15 seconds, so a new beat appears on its own — no reload.
 If a server is unreachable it's tried once per beat (not once per component), so a down host can't
-stall the check. Status history is kept for 3 days. For a running WildFly each beat also runs the
+stall the check. The status readings themselves are kept for 3 days; the **service history** (below) for 30 days (`SERVICE_HISTORY_DAYS`). For a running WildFly each beat also runs the
 datasource and traffic checks (see *WildFly's database connections and traffic*), which add two `jboss-cli.sh` calls and two `curl` requests; a failure is
 flagged, never acted on. A component parked as *Failed (due to expired password)*, *Failed (can't receive traffic)* or *Failed (database
 connection)* keeps that status while it stays down, instead of turning into a bare "Stopped" at the next beat.
@@ -761,8 +785,48 @@ beats. A beat runs short commands over one reused SSH connection. These figures 
 | WildFly: two `curl` requests (`/health/ready`, web port) | only while WildFly runs | ~0.02 CPU-s | ~10 MB |
 
 A beat costs about 5–6 CPU-seconds when WildFly is running, mostly within a few seconds, and under 1
-CPU-second when it isn't. Spread over 30 minutes that's about 0.04% of an 8-core server. Each
+CPU-second when it isn't. Spread over 2 hours that's about 0.01% of an 8-core server. Each
 datasource test also makes one small connection check against its database.
+
+### Service history
+
+A service's **⋯** menu → **Show its history** lists everything that happened to it in the last 30 days
+(`SERVICE_HISTORY_DAYS`), newest first, grouped by day: **Started**, **Stopped**, **Restarted**, **Stopped with
+an error**, **Failed to start**, **Kept crashing**, and settings changes (**Set to start with the server** / **not
+to**, **Blocked from starting**). Each entry says who did it:
+
+| The line says | Meaning |
+|---|---|
+| **In Healthcheck, by temp (Stop All)** | One of Healthcheck's runs did it, started by that person |
+| **By sam in a terminal (pts/0)** + the command, e.g. `sudo systemctl start artemis.service` | A person ran it on the server with sudo (or typed their password for polkit). The name is their account on the server |
+| **Outside Healthcheck, and not through sudo** | Someone with a root shell, a script or a scheduled job; the person isn't recorded. Root shells open at that moment are listed (e.g. "sam (sudo su -, pts/1, since 12:40)") as the likely candidates |
+| **systemd restarted it automatically** / **Kept crashing** | It ended on its own and systemd's `Restart=` brought it back. Repeated crashes are one entry with how many times and until when, e.g. "5,245 times, until today 11:45. Each time: exit code 1" |
+| **Nobody asked systemd to stop it** | It crashed or ended by itself (with the exit code, a signal, or "the server ran out of memory and killed it"). A `sudo kill` just before shows as "Probably by sam" |
+| **When the server started up** / **The server restarted** | Started at boot / went down with a reboot |
+
+**How it works:**
+- **Where it comes from:** the server's journal. systemd logs every start, stop and crash of each service, and
+  sudo logs every command with the person and their terminal. Healthcheck reads only systemd's lines about the
+  watched services and the sudo / su / polkit / root-login lines, in the same SSH command as the status check:
+  at every heartbeat (every 2 hours), at every **Check status**, and right after each Start / Restart / Stop
+  run. Each read picks up where the last one stopped, so nothing in between is missed, and a Healthcheck run
+  counts only for the services it actually started or stopped (a Check status never takes the credit).
+- **Who may read the journal:** the account Healthcheck signs in with must be able to read the system journal.
+  On Rocky / RHEL, members of `wheel` or `adm` can (as on loyalty_1); elsewhere add it to `systemd-journal`:
+  `sudo usermod -aG systemd-journal <user>`. Without that, Healthcheck falls back to systemd's timestamps
+  (`systemctl show`): when each service last started and stopped and how it ended. Then several stops and
+  starts between two reads show as the latest ones, who did it in a terminal isn't known, and the history
+  window says so.
+- **Exact times:** times come from the journal, not from when Healthcheck happened to look. They're moved
+  onto Healthcheck's clock if the server's clock differs.
+- **What counts as an error:** a non-zero exit code or a signal is shown as an error. Two exceptions:
+  - **Java's exit code 143 / 130** is how WildFly, Artemis and the Spring Boot services exit when asked to
+    stop, so it counts as a normal stop.
+  - **An odd exit code during a requested stop** is shown as a normal stop, with "it ended with exit code N".
+- **Server restarts:** spotted from the server's boot id, so correcting the clock doesn't look like a restart.
+- **Journals that don't survive a restart:** some servers (loyalty_1 among them) keep the journal only in
+  memory, so what happened between the last read and a restart is lost; the history window says so. To keep
+  it across restarts: `sudo mkdir -p /var/log/journal && sudo systemctl restart systemd-journald`.
 
 ### Logs
 

@@ -1,14 +1,11 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { ALL as ALL_PERMISSIONS, OPERATOR as OPERATOR_PERMISSIONS } from '../auth/permissions.js';
+import { env } from '../env.js';
 
-// Default: server/data inside the project, wherever the app is started from (the folder is in .gitignore).
-const here = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = process.env.HEALTHCHECK_DATA_DIR
-  ? path.resolve(process.env.HEALTHCHECK_DATA_DIR)
-  : path.resolve(here, '../../data');
+// HEALTHCHECK_DATA_DIR in the settings file; by default server/data inside the project (in .gitignore).
+const dataDir = env.dataDir;
 fs.mkdirSync(dataDir, { recursive: true });
 
 export const sqlite = new DatabaseSync(path.join(dataDir, 'healthcheck.sqlite'));
@@ -173,6 +170,52 @@ CREATE TABLE IF NOT EXISTS password_resets (
   ip TEXT
 );
 
+-- Service history (see scan/history.ts, scan/journal.ts): every start / stop / restart / crash systemd logged,
+-- read at each check, with who did it: a Healthcheck run (and whose), a person's sudo command, systemd, a reboot.
+CREATE TABLE IF NOT EXISTS service_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  software_id INTEGER NOT NULL,
+  at TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  detail TEXT,
+  source TEXT NOT NULL,
+  actor TEXT,
+  job_id INTEGER,
+  job_kind TEXT,
+  boot_time INTEGER NOT NULL,
+  mono INTEGER NOT NULL,
+  recorded_at TEXT NOT NULL,
+  UNIQUE(server_id, software_id, kind, boot_time, mono)
+);
+
+CREATE INDEX IF NOT EXISTS idx_service_events_pair ON service_events(server_id, software_id, at);
+
+-- Per server: how its history is read ('journal' or 'snapshot'), and for the journal, where the last read
+-- stopped and what it had half seen (scan/journal.ts JState, as JSON).
+CREATE TABLE IF NOT EXISTS history_state (
+  server_id INTEGER PRIMARY KEY,
+  mode TEXT NOT NULL,
+  state TEXT,
+  persistent INTEGER,
+  updated_at TEXT NOT NULL
+);
+
+-- What systemd said about each service at the last read, to spot what changed since.
+CREATE TABLE IF NOT EXISTS service_snapshots (
+  server_id INTEGER NOT NULL,
+  software_id INTEGER NOT NULL,
+  unit TEXT NOT NULL,
+  boot_id TEXT,
+  boot_time INTEGER NOT NULL,
+  active_enter INTEGER NOT NULL,
+  inactive_enter INTEGER NOT NULL,
+  n_restarts INTEGER NOT NULL,
+  active TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (server_id, software_id)
+);
+
 -- Sign-ins, failures, password changes and resets, user changes: who / what / when.
 CREATE TABLE IF NOT EXISTS auth_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -207,6 +250,18 @@ ensureColumn('job_runs', 'awaiting', 'TEXT');
 ensureColumn('job_runs', 'notices', 'TEXT');
 // who started the run (username), for the activity list
 ensureColumn('job_runs', 'started_by', 'TEXT');
+// the server's boot id at the last history read (a new one = the server restarted)
+ensureColumn('service_snapshots', 'boot_id', 'TEXT');
+// history read from the journal: where it came from ('journal' / 'snapshot'), the command and terminal of the
+// person who ran it, root sessions open when the person isn't known (JSON), "probably" for a kill near a crash,
+// and for "kept crashing" rows how many times and until when
+ensureColumn('service_events', 'origin', 'TEXT');
+ensureColumn('service_events', 'command', 'TEXT');
+ensureColumn('service_events', 'terminal', 'TEXT');
+ensureColumn('service_events', 'sessions', 'TEXT');
+ensureColumn('service_events', 'probable', 'INTEGER');
+ensureColumn('service_events', 'count', 'INTEGER');
+ensureColumn('service_events', 'until_at', 'TEXT');
 // an admin's authenticator app, for "Forgot password" (see auth/totp.ts): the secret, encrypted with master.key;
 // one being set up but not yet confirmed with a code; the last code's time step (each code works once); when it
 // was set up

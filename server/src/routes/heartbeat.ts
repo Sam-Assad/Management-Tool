@@ -13,11 +13,47 @@ import { checkArtemisNow } from '../heartbeat/artemisBeat.js';
 
 export const heartbeatRouter = Router();
 
-// "*/5 * * * *" -> 5. Anything fancier than every-N-minutes is reported as unknown.
-function intervalMinutes(): number | null {
-  const m = /^\*\/(\d+) \* \* \* \*$/.exec(env.heartbeatCron.trim());
-  return m ? Number(m[1]) : null;
+// How often the background check runs, in minutes: "*/30 * * * *" -> 30, "0 */2 * * *" -> 120, "0 * * * *" -> 60.
+// Anything fancier is reported as unknown.
+export function intervalMinutes(cron = env.heartbeatCron): number | null {
+  const c = cron.trim().replace(/\s+/g, ' ');
+  const minutes = /^\*\/(\d+) \* \* \* \*$/.exec(c);
+  if (minutes) return Number(minutes[1]);
+  const hours = /^\d{1,2} (?:\*\/(\d+)|\*) \* \* \*$/.exec(c);
+  if (hours) return Number(hours[1] ?? 1) * 60;
+  return null;
 }
+
+// A service's history (starts, stops, crashes), newest first, for the "Show its history" window.
+heartbeatRouter.get('/servers/:id/software/:softwareId/history', (req, res) => {
+  const serverId = Number(req.params.id);
+  const softwareId = Number(req.params.softwareId);
+  const events = (
+    sqlite
+      .prepare(
+        `SELECT at, kind, detail, source, actor, job_id, job_kind, origin, command, terminal, sessions, probable, count, until_at
+         FROM service_events WHERE server_id = ? AND software_id = ? ORDER BY at DESC, id DESC LIMIT 500`,
+      )
+      .all(serverId, softwareId) as Record<string, unknown>[]
+  ).map((e) => ({ ...e, sessions: e.sessions ? JSON.parse(String(e.sessions)) : null, probable: Boolean(e.probable) }));
+  const read = sqlite.prepare('SELECT updated_at FROM service_snapshots WHERE server_id = ? AND software_id = ?').get(serverId, softwareId) as
+    | { updated_at: string }
+    | undefined;
+  // how it's read on this server: 'journal' (everything, and who) or 'snapshot' (timestamps only)
+  const how = sqlite.prepare('SELECT mode, persistent FROM history_state WHERE server_id = ?').get(serverId) as
+    | { mode: string; persistent: number | null }
+    | undefined;
+  const server = sqlite.prepare('SELECT ssh_username FROM servers WHERE id = ?').get(serverId) as { ssh_username: string } | undefined;
+  res.json({
+    days: env.serviceHistoryDays,
+    interval_minutes: intervalMinutes(),
+    last_read_at: read?.updated_at ?? null,
+    mode: how?.mode ?? null,
+    journal_kept: how?.persistent == null ? null : Boolean(how.persistent),
+    ssh_user: server?.ssh_username ?? null,
+    events,
+  });
+});
 
 heartbeatRouter.get(
   '/groups/:groupId/heartbeat',

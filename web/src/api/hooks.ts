@@ -271,6 +271,54 @@ export function useArtemisCheckNow(serverId: number) {
   });
 }
 
+// The background check's interval in words: 120 -> "2 hours", 60 -> "hour", 30 -> "30 minutes".
+export function intervalText(minutes: number): string {
+  if (minutes % 60 === 0) return minutes === 60 ? 'hour' : `${minutes / 60} hours`;
+  return minutes === 1 ? 'minute' : `${minutes} minutes`;
+}
+
+export interface ServiceEvent {
+  at: string;
+  kind: 'started' | 'stopped' | 'restarted' | 'crashed' | 'start_failed' | 'crash_loop' | 'reloaded' | 'enabled' | 'disabled' | 'masked' | 'unmasked';
+  detail: string | null;
+  // healthcheck = a run in Healthcheck (actor = who); terminal = a person's sudo / polkit command (actor = their
+  // account on the server); outside = not through sudo, person unknown; systemd = restarted it; itself = ended
+  // with nobody asking; reboot / boot = the server restarting / starting up
+  source: 'healthcheck' | 'terminal' | 'outside' | 'systemd' | 'itself' | 'reboot' | 'boot';
+  actor: string | null;
+  job_id: number | null;
+  job_kind: string | null;
+  origin: 'journal' | 'snapshot' | null;
+  command: string | null;
+  terminal: string | null;
+  // root shells open at the time, when the person isn't known
+  sessions: { user: string; how: string; tty: string | null; since: string }[] | null;
+  probable: boolean;
+  // "kept crashing": how many times, until when
+  count: number | null;
+  until_at: string | null;
+}
+
+export interface ServiceHistoryData {
+  days: number;
+  interval_minutes: number | null;
+  last_read_at: string | null;
+  // how this server's history is read: journal = everything and who; snapshot = systemd's timestamps only
+  mode: 'journal' | 'snapshot' | null;
+  journal_kept: boolean | null; // does the server's journal survive a restart
+  ssh_user: string | null;
+  events: ServiceEvent[];
+}
+
+// A service's starts, stops, restarts and crashes, and who did them (read at each check and after each run).
+export function useServiceHistory(serverId: number, softwareId: number) {
+  return useQuery({
+    queryKey: ['servers', serverId, 'history', softwareId],
+    queryFn: () => api.get<ServiceHistoryData>(`/servers/${serverId}/software/${softwareId}/history`),
+    refetchInterval: 30000,
+  });
+}
+
 // What the latest heartbeat found wrong with WildFly anywhere - database-only, cheap to poll.
 export function useBeatAlerts() {
   return useQuery({

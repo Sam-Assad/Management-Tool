@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { useBeatAlerts, type BeatAlert } from '../api/hooks';
+import { intervalText, useBeatAlerts, type BeatAlert } from '../api/hooks';
 import { ToneIcon } from './DecisionModal';
 import { size } from './ArtemisNoticeModal';
 
@@ -106,7 +106,7 @@ export default function BeatAlertModal() {
   const kinds = new Set(open.map((a) => a.kind));
   // when the next check comes depends on which check found it: WildFly's heartbeat or Artemis's own beat
   const schedule = [
-    kinds.has('wildfly') && every ? `WildFly is checked every ${every} minutes` : null,
+    kinds.has('wildfly') && every ? `WildFly is checked every ${intervalText(every)}` : null,
     kinds.has('artemis') && data?.artemis_schedule ? `Artemis's queues and memory are checked ${data.artemis_schedule}` : null,
   ].filter(Boolean);
 

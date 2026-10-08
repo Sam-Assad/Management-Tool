@@ -45,6 +45,10 @@ Healthcheck installs nothing on the Linux servers. It logs in as a service accou
       ```
       (Use the path `which systemctl` prints. If sudo says "you must have a tty", also add
       `Defaults:svc_user !requiretty`.)
+- [ ] For the full service history (who stopped what from a terminal), that account can read the system
+      journal: `journalctl -n 1 _PID=1` prints a line. On Rocky / RHEL `wheel` or `adm` members can;
+      otherwise `sudo usermod -aG systemd-journal svc_user`. Optional: Healthcheck works without it, with a
+      shorter history.
 
 ---
 
@@ -78,7 +82,7 @@ npm run build
 $out = "$env:TEMP\healthcheck-release"
 Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory $out, "$out\shared", "$out\server", "$out\web" | Out-Null
-Copy-Item package.json, package-lock.json, tsconfig.base.json, README.md, DEPLOYMENT.md, .env.example $out
+Copy-Item package.json, package-lock.json, tsconfig.base.json, README.md, DEPLOYMENT.md $out
 Copy-Item shared\package.json "$out\shared\";  Copy-Item shared\dist "$out\shared\dist" -Recurse
 Copy-Item server\package.json "$out\server\";  Copy-Item server\dist "$out\server\dist" -Recurse
 Copy-Item server\defaults "$out\server\defaults" -Recurse      # the shipped catalog + conditions
@@ -108,20 +112,22 @@ check it starts (step 4).
 
 ## 3. Configure
 
-Create a file named `.env` **in the project root** (`C:\Healthcheck\.env`; a `server\.env` also works).
-Start from the template:
+All settings are in **one file, `C:\Healthcheck\.env`**. Healthcheck writes it itself, with every setting at
+its default and a comment on each. Have it written now, then open it:
 
 ```powershell
-copy .env.example .env
+npm run settings
 notepad .env
 ```
 
-The settings that matter for a new install:
+Each setting says what it does and its default. **(recommended)** means keep the default. The ones to set
+for a new install:
 
 ```ini
 PORT=4000
 HOST=127.0.0.1
 HEALTHCHECK_DATA_DIR=D:\HealthcheckData
+ARTEMIS_PASSWORD=<the broker password>
 ```
 
 | Setting | What to put |
@@ -129,9 +135,11 @@ HEALTHCHECK_DATA_DIR=D:\HealthcheckData
 | `PORT` | The port for the web page. |
 | `HOST` | `127.0.0.1` = only this machine can open the page (recommended). See **Security** below before changing it. |
 | `HEALTHCHECK_DATA_DIR` | A folder **outside** the application folder, so upgrades never touch it. It is created on first start. If you leave it out, the data goes to `server\data` inside the application folder (it is excluded from git, but a re-install of the folder would delete it). |
+| `ARTEMIS_PASSWORD` | The Artemis broker password, for the report after each start. |
 
-The other settings (retry counts, parallel starts, heartbeat interval …) have sensible defaults; the full
-list is in README section 2. Real environment variables always win over the `.env` file.
+Leave the other settings (retry counts, parallel starts, heartbeat interval …) at their defaults unless you
+have a reason. The file is never committed (it holds the password). When an upgrade brings a new setting,
+Healthcheck adds it to the file at its default and keeps your values.
 
 ---
 
@@ -145,6 +153,7 @@ npm start
 You should see:
 
 ```
+Settings: C:\Healthcheck\.env
 Healthcheck server listening on http://127.0.0.1:4000
 ```
 
@@ -266,7 +275,7 @@ Nothing else was installed there.
 | `No such built-in module: node:sqlite` when starting | Node.js is too old. Install 22.13 or newer. |
 | `EADDRINUSE` / "address already in use" on start | Another program uses that port on the Windows machine. Change `PORT` in `.env`. |
 | Page shows *Cannot GET /* or is blank | The web part isn't built (`web\dist` is missing). Run `npm run build` (route A) or re-unpack the zip (route B). |
-| My `.env` changes have no effect | The service wasn't restarted, or the file isn't in the project root (`C:\Healthcheck\.env`). |
+| My `.env` changes have no effect | The service wasn't restarted, or you edited another file: the start-up log line `Settings: …` names the one Healthcheck reads (`C:\Healthcheck\.env`). |
 | Adding a server says *unreachable* | Wrong host or port, or a firewall between the two machines. Test with `Test-NetConnection <host> -Port 22`. |
 | Adding a server says *authentication failed* | Wrong user name or password for the service account. |
 | Start/Stop fails mentioning sudo or a password | The `NOPASSWD` rule is missing for `systemctl` (section 1). |

@@ -1,7 +1,7 @@
 import { createApp } from './app.js';
 import { sqlite } from './db/client.js';
 import { normalizeServerGroups } from './db/serverGroups.js';
-import { env } from './env.js';
+import { env, settingsFile, settingsStatus } from './env.js';
 import { startHeartbeatScheduler } from './heartbeat/scheduler.js';
 import { startArtemisScheduler } from './heartbeat/artemisBeat.js';
 import { resequenceAll } from './orchestrator/ordering.js';
@@ -16,6 +16,12 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled rejection (ignored to keep the server running):', err);
 });
+
+// The one settings file: where it is, and whether it was just written
+console.log(`Settings: ${settingsFile}`);
+if (settingsStatus.created) console.log('  created, with every setting at its default: fill in ARTEMIS_PASSWORD, then restart Healthcheck');
+if (settingsStatus.added.length) console.log(`  added at their defaults: ${settingsStatus.added.join(', ')}`);
+if (settingsStatus.error) console.warn(`  could not be written (${settingsStatus.error}); missing settings use their defaults. Run "npm run settings" as a user who may write it.`);
 
 // The software catalog and conditions that ship with Healthcheck (server/defaults/defaults.json): whatever
 // is missing here is added, and fields the vendor changed are updated unless this installation edited them.
