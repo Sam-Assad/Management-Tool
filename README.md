@@ -76,6 +76,16 @@ npm start                    # serves the built UI + API from a single Node proc
 > file is saved. A restart marks any running Start / Restart / Stop All job as *Interrupted* (nothing is
 > stopped, but the run and any question it was asking are gone, and you have to start it again).
 
+**Tests** (in `tests/`):
+
+```bash
+npm test                     # builds, then runs every self-contained suite (own throwaway database each)
+npm run test:live            # the permissions suite against the running Healthcheck (hc-test-* accounts only)
+```
+
+Neither touches the servers, the real data folder or `.env`. The browser check in `fresh-install` needs Chrome
+(set `CHROME_PATH` if it isn't in the usual place).
+
 ### Settings: one file, `.env`
 
 Every setting is in **one file: `.env` in the Healthcheck folder** (next to `package.json`). Healthcheck reads

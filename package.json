@@ -15,6 +15,8 @@
     "start": "node server/dist/index.js",
     "reset-password": "npm run reset-password --workspace server --",
     "settings": "npm run settings --workspace server",
+    "test": "npm run build && node tests/run.mjs",
+    "test:live": "node tests/run.mjs --live",
     "defaults:export": "node server/dist/tools/defaults.js export",
     "defaults:reset": "node server/dist/tools/defaults.js reset"
   },
