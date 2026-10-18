@@ -227,8 +227,10 @@ interface UnitState {
   sched?: number; // systemd scheduled an automatic restart (its restart counter)
   restarting?: { us: number; who: Who; detail: string | null }; // a restart's stop done, its start to come
   lastStop?: { rows: number[]; us: number; who: Who }; // to make a Healthcheck Restart's stop + start one entry
-  lastCrash?: { rows: number[]; us: number; mono: number; detail: string | null };
-  cycle?: { rows: number[]; crashUs: number; crashMono: number; startUs: number }; // crash + automatic restart
+  lastCrash?: { rows: number[]; us: number; mono: number; detail: string | null; ranForS: number | null };
+  // crash + automatic restart (ranForS: how long it had been running before that crash)
+  cycle?: { rows: number[]; crashUs: number; crashMono: number; startUs: number; ranForS: number | null };
+  upSince?: number; // when it last started (any start, systemd's automatic ones too)
   loop?: { rows: number[]; count: number; lastUs: number }; // "kept crashing" (several cycles close together)
 }
 
@@ -270,6 +272,8 @@ export interface Emit {
   who: Who;
   count?: number;
   untilUs?: number;
+  // the first crash of a run: how long the service had been running before it (null = since before the first read)
+  ranForS?: number | null;
 }
 
 export interface Ctx {
@@ -277,6 +281,8 @@ export interface Ctx {
   myAddress: string | null; // Healthcheck's address as the server sees it (its own root logins aren't "root shells")
   // the Healthcheck run (start / stop / restart) that was handling this service at that moment, if any
   runFor(unit: string, us: number): { id: number; kind: string; started_by: string | null } | undefined;
+  // crashes less than this long after systemd restarted the service are one run ("Kept crashing"); default 60 min
+  loopGapUs?: number;
 }
 
 export interface Sink {
@@ -287,7 +293,7 @@ export interface Sink {
 
 const MIN = 60_000_000;
 const COMMAND_WINDOW = 30_000_000; // a command counts for a job systemd began up to 30 s later
-const LOOP_GAP = 10 * MIN; // crashes closer together than this are one "kept crashing" entry
+const LOOP_GAP = 60 * MIN; // crashes closer together than this are one "kept crashing" entry (unless ctx.loopGapUs)
 const BOOT_WINDOW = 15 * MIN; // a start nobody asked for this soon after boot is the server starting up
 const RECENT_KEEP = 15 * MIN;
 
@@ -478,25 +484,32 @@ function flushEnded(st: JState, unit: string, s: UnitState, ctx: Ctx, sink: Sink
   }
   s.active = false;
   s.lastCrash = undefined;
+  const gap = ctx.loopGapUs ?? LOOP_GAP;
   if (who.source === 'itself' && !normal) {
     // crashing again soon after systemd restarted it: counted in one "kept crashing" entry
-    if (s.loop && x.us - s.loop.lastUs <= LOOP_GAP) {
+    if (s.loop && x.us - s.loop.lastUs <= gap) {
       s.loop.count += 1;
       s.loop.lastUs = x.us;
       sink.update(s.loop.rows, { count: s.loop.count, untilUs: x.us, detail });
       return;
     }
-    if (s.cycle && x.us - s.cycle.startUs <= LOOP_GAP) {
+    if (s.cycle && x.us - s.cycle.startUs <= gap) {
       sink.remove(s.cycle.rows);
-      const rows = emit(sink, unit, 'crash_loop', { us: s.cycle.crashUs, mono: s.cycle.crashMono }, detail, { source: 'systemd' }, { count: 2, untilUs: x.us });
+      const rows = emit(sink, unit, 'crash_loop', { us: s.cycle.crashUs, mono: s.cycle.crashMono }, detail, { source: 'systemd' }, {
+        count: 2,
+        untilUs: x.us,
+        ranForS: s.cycle.ranForS,
+      });
       s.loop = { rows, count: 2, lastUs: x.us };
       s.cycle = undefined;
       return;
     }
   }
   s.loop = s.cycle = undefined;
-  const rows = emit(sink, unit, normal ? 'stopped' : 'crashed', x, detail, who);
-  s.lastCrash = { rows, us: x.us, mono: x.mono, detail };
+  // the first crash of a run: how long it had been running (decides whether repeated crashes raise an alert)
+  const ranForS = s.upSince ? Math.max(0, Math.round((x.us - s.upSince) / 1e6)) : null;
+  const rows = emit(sink, unit, normal ? 'stopped' : 'crashed', x, detail, who, normal ? undefined : { ranForS });
+  s.lastCrash = { rows, us: x.us, mono: x.mono, detail, ranForS };
 }
 
 function onUnit(st: JState, e: JEntry, ctx: Ctx, sink: Sink) {
@@ -587,6 +600,7 @@ function onUnit(st: JState, e: JEntry, ctx: Ctx, sink: Sink) {
       }
       s.begin = s.exit = s.result = s.sched = s.restarting = s.lastStop = s.lastCrash = undefined;
       s.active = true;
+      s.upSince = e.us;
       break;
     }
     case 'start_failed': {
@@ -618,7 +632,7 @@ function automaticStart(s: UnitState, unit: string, e: JEntry, sink: Sink) {
     sink.update(s.loop.rows, { untilUs: e.us });
   } else {
     const rows = emit(sink, unit, 'started', e, `systemd restarted it automatically${n ? ` (restart ${n} since the server started)` : ''}`, { source: 'systemd' });
-    s.cycle = { rows: [...(crash?.rows ?? []), ...rows], crashUs: crash?.us ?? e.us, crashMono: crash?.mono ?? e.mono, startUs: e.us };
+    s.cycle = { rows: [...(crash?.rows ?? []), ...rows], crashUs: crash?.us ?? e.us, crashMono: crash?.mono ?? e.mono, startUs: e.us, ranForS: crash?.ranForS ?? null };
   }
   s.lastCrash = undefined;
 }

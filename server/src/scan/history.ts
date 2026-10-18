@@ -16,6 +16,7 @@ import { env } from '../env.js';
 import { runCommand } from '../ssh/exec.js';
 import { getConnection } from '../ssh/connectionManager.js';
 import { unitNames } from './detectors.js';
+import { checkCrashes } from './crashAlerts.js';
 import { MSG, newBoot, newState, parseJournal, processJournal, type Ctx, type JEntry, type JState, type Sink, type Who } from './journal.js';
 
 export type EventKind = 'started' | 'stopped' | 'crashed';
@@ -281,13 +282,20 @@ export function readServiceHistory(server: ServerRow, client?: Client): Promise<
     const sentAt = Date.now();
     const res = await runCommand(conn, `${historyCommand(units)}; ${journalCommand(units, unitSince, authSince, !st)}`, 90000);
     if (!/^btime /m.test(res.stdout)) throw new Error(`could not read the service history: ${res.stderr.trim() || 'no output'}`);
-    return recordHistory(server, res.stdout, sentAt);
+    const added = recordHistory(server, res.stdout, sentAt);
+    // services that had been running fine and keep crashing: open / update / close their alerts
+    try {
+      await checkCrashes(server, conn);
+    } catch (err: any) {
+      console.error(`Crash check for ${server.name} failed:`, err?.message ?? err);
+    }
+    return added;
   });
 }
 
 const INSERT_EVENT = `INSERT OR IGNORE INTO service_events
-  (server_id, software_id, at, kind, detail, source, actor, job_id, job_kind, boot_time, mono, recorded_at, origin, command, terminal, sessions, probable, count, until_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  (server_id, software_id, at, kind, detail, source, actor, job_id, job_kind, boot_time, mono, recorded_at, origin, command, terminal, sessions, probable, count, until_at, ran_for_s)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 // The part after SSH: what the command printed -> new entries, snapshots and the journal position. sentAt: when
 // the command was sent (the server's clock is read near its start).
@@ -370,6 +378,7 @@ function recordSnapshots(server: ServerRow, defs: SoftwareDefinition[], units: U
           null,
           null,
           null,
+          null,
         );
         added += Number(r.changes);
       }
@@ -434,6 +443,7 @@ function recordJournal(
           w.probable ? 1 : null,
           e.count ?? null,
           e.untilUs ? toIso(e.untilUs) : null,
+          e.ranForS ?? null,
         );
         if (Number(r.changes)) rows.push(Number(r.lastInsertRowid));
       }
@@ -451,6 +461,7 @@ function recordJournal(
     sshUser: server.ssh_username,
     myAddress: journal.me,
     runFor: (unit, us) => runFor(server.id, unitDefs.get(unit) ?? [], us / 1000 + skewMs),
+    loopGapUs: env.crashLoopMinutes * 60e6,
   };
 
   processJournal(st, journal.units, journal.auth, ctx, sink);

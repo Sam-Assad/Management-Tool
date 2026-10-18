@@ -226,16 +226,32 @@ export function useDeleteCondition() {
   });
 }
 
+export interface CrashFacts {
+  disks: { mount: string; sizeKb: number; availKb: number; usedPct: number }[];
+  memory: { totalKb: number; availableKb: number } | null;
+  oom: string[];
+}
+
 export interface BeatAlert {
-  // wildfly: can't take traffic / database problem; artemis: its own beat found memory too high
-  kind: 'wildfly' | 'artemis';
+  // wildfly: can't take traffic / database problem; artemis: its own beat found memory too high;
+  // crash: a service that had been running fine keeps crashing (crashing), or systemd gave up on it (gave_up)
+  kind: 'wildfly' | 'artemis' | 'crash';
   server_id: number;
   server_name: string;
   software_id: number;
   software_name: string;
-  state: 'not_ready' | 'datasource_down' | 'memory_high';
+  state: 'not_ready' | 'datasource_down' | 'memory_high' | 'crashing' | 'gave_up';
   detail: string | null;
   artemis?: ArtemisReport;
+  crash?: {
+    count: number;
+    first_crash_at: string;
+    last_crash_at: string;
+    ran_for_s: number | null; // how long it had been running before the crashes began (null = longer than Healthcheck knows)
+    reason: string | null;
+    excerpt: string | null; // the error from its log
+    facts: CrashFacts | null; // the server's disks and memory
+  };
   checked_at: string;
 }
 
@@ -297,6 +313,17 @@ export interface ServiceEvent {
   // "kept crashing": how many times, until when
   count: number | null;
   until_at: string | null;
+  // a crash nobody asked for: how long it had been running before it (seconds; null = not known)
+  ran_for_s: number | null;
+}
+
+// "6 days", "3 hours", "25 minutes"
+export function durationText(seconds: number): string {
+  const m = Math.round(seconds / 60);
+  if (m < 90) return `${Math.max(1, m)} minute${m === 1 ? '' : 's'}`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h} hours`;
+  return `${Math.round(h / 24)} days`;
 }
 
 export interface ServiceHistoryData {
@@ -323,7 +350,8 @@ export function useServiceHistory(serverId: number, softwareId: number) {
 export function useBeatAlerts() {
   return useQuery({
     queryKey: ['alerts'],
-    queryFn: () => api.get<{ interval_minutes: number | null; artemis_schedule: string; alerts: BeatAlert[] }>('/alerts'),
+    queryFn: () =>
+      api.get<{ interval_minutes: number | null; artemis_schedule: string; crash_check_minutes: number | null; alerts: BeatAlert[] }>('/alerts'),
     refetchInterval: 30000,
   });
 }

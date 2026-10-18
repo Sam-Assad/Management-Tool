@@ -10,6 +10,7 @@ import { env } from '../env.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { latestArtemisCheck, isArtemis, describeArtemisSchedule, type ArtemisReport } from '../scan/artemis.js';
 import { checkArtemisNow } from '../heartbeat/artemisBeat.js';
+import type { CrashFacts } from '../scan/crashAlerts.js';
 
 export const heartbeatRouter = Router();
 
@@ -31,7 +32,7 @@ heartbeatRouter.get('/servers/:id/software/:softwareId/history', (req, res) => {
   const events = (
     sqlite
       .prepare(
-        `SELECT at, kind, detail, source, actor, job_id, job_kind, origin, command, terminal, sessions, probable, count, until_at
+        `SELECT at, kind, detail, source, actor, job_id, job_kind, origin, command, terminal, sessions, probable, count, until_at, ran_for_s
          FROM service_events WHERE server_id = ? AND software_id = ? ORDER BY at DESC, id DESC LIMIT 500`,
       )
       .all(serverId, softwareId) as Record<string, unknown>[]
@@ -89,7 +90,7 @@ heartbeatRouter.get(
 );
 
 interface Alert {
-  kind: 'wildfly' | 'artemis';
+  kind: 'wildfly' | 'artemis' | 'crash';
   server_id: number;
   server_name: string;
   software_id: number;
@@ -97,7 +98,51 @@ interface Alert {
   state: string;
   detail: string | null;
   artemis?: ArtemisReport;
+  crash?: {
+    count: number;
+    first_crash_at: string;
+    last_crash_at: string;
+    ran_for_s: number | null;
+    reason: string | null;
+    excerpt: string | null;
+    facts: CrashFacts | null;
+  };
   checked_at: string | null;
+}
+
+// Services that had been running fine and keep crashing (scan/crashAlerts.ts), still crashing or given up on by
+// systemd, on services still in their server's list.
+function crashAlerts(): Alert[] {
+  const rows = sqlite
+    .prepare(
+      `SELECT a.*, s.name AS server_name, sd.name AS software_name FROM crash_alerts a
+       JOIN servers s ON s.id = a.server_id
+       JOIN software_definitions sd ON sd.id = a.software_id
+       JOIN group_software gs ON gs.group_id = s.group_id AND gs.software_id = a.software_id
+       WHERE a.state IN ('crashing', 'gave_up')
+       ORDER BY s.name, a.first_crash_at`,
+    )
+    .all() as any[];
+  return rows.map((a) => ({
+    kind: 'crash' as const,
+    server_id: a.server_id,
+    server_name: a.server_name,
+    software_id: a.software_id,
+    software_name: a.software_name,
+    state: a.state,
+    detail: a.detail,
+    crash: {
+      count: a.count,
+      first_crash_at: a.first_crash_at,
+      last_crash_at: a.last_crash_at,
+      ran_for_s: a.ran_for_s,
+      reason: a.reason,
+      excerpt: a.excerpt,
+      facts: a.facts ? JSON.parse(a.facts) : null,
+    },
+    // a new look (each check while it keeps crashing) brings a closed popup back
+    checked_at: a.looked_at ?? a.updated_at,
+  }));
 }
 
 // What the latest heartbeat found wrong with WildFly, on every server: running but unable to take traffic, or
@@ -154,7 +199,12 @@ heartbeatRouter.get(
         },
       ];
     });
-    res.json({ interval_minutes: intervalMinutes(), artemis_schedule: describeArtemisSchedule(), alerts });
+    res.json({
+      interval_minutes: intervalMinutes(),
+      artemis_schedule: describeArtemisSchedule(),
+      crash_check_minutes: intervalMinutes(env.crashCheckCron),
+      alerts: [...crashAlerts(), ...alerts],
+    });
   })
 );
 

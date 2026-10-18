@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { intervalText, useServiceHistory, type ServiceEvent } from '../api/hooks';
+import { durationText, intervalText, useServiceHistory, type ServiceEvent } from '../api/hooks';
 
 // "Show its history": every start, stop, restart and crash of a service and who did it - a Healthcheck run (and
 // whose), a person in a terminal (with the command), systemd, or the server restarting. Read from the server's
@@ -64,11 +64,13 @@ function who(e: ServiceEvent, sshUser: string | null): string {
 }
 
 function detail(e: ServiceEvent): string | null {
+  // the first crash of a run: how long it had been running before
+  const after = (e.kind === 'crash_loop' || e.kind === 'crashed') && e.ran_for_s != null && e.ran_for_s >= 60 ? ` It had been running for ${durationText(e.ran_for_s)}.` : '';
   if (e.kind === 'crash_loop' && e.count) {
-    return `${e.count.toLocaleString()} times, until ${until(e.until_at ?? e.at, e.at)}${e.detail ? `. Each time: ${e.detail}` : ''}`;
+    return `${e.count.toLocaleString()} times, until ${until(e.until_at ?? e.at, e.at)}${e.detail ? `. Each time: ${e.detail}` : ''}.${after}`;
   }
   if (e.source === 'reboot' && e.detail === 'the server restarted') return null;
-  return e.detail;
+  return e.detail && after ? `${e.detail}.${after}` : e.detail;
 }
 
 function dayLabel(d: Date): string {

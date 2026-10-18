@@ -20,6 +20,7 @@ import {
   useStopOne,
   useArtemisStatus,
   useArtemisCheckNow,
+  useBeatAlerts,
 } from '../api/hooks';
 import type { ServerSummary } from '../api/hooks';
 import JobProgressPanel from '../components/JobProgressPanel';
@@ -158,7 +159,10 @@ const TILES: { tone: Tone; label: string; onlyWhenAny?: boolean }[] = [
   { tone: 'stopped', label: 'Stopped' },
   { tone: 'busy', label: 'Starting or stopping', onlyWhenAny: true },
 ];
-type GroupId = 'datasource_down' | 'not_ready' | 'credential_expired' | 'failed' | 'unreachable' | 'stopped' | 'busy' | 'working' | 'idle';
+type GroupId = 'crashing' | 'datasource_down' | 'not_ready' | 'credential_expired' | 'failed' | 'unreachable' | 'stopped' | 'busy' | 'working' | 'idle';
+
+// a service with an open crash alert (it had been running fine and keeps crashing), whatever its state right now
+const CRASHING_VIEW: { label: string; tone: Tone; group: GroupId } = { label: 'Keeps crashing', tone: 'bad', group: 'crashing' };
 
 const STATE_VIEW: Record<string, { label: string; tone: Tone; group: GroupId }> = {
   running: { label: 'Working', tone: 'ok', group: 'working' },
@@ -177,6 +181,12 @@ const STATE_VIEW: Record<string, { label: string; tone: Tone; group: GroupId }> 
 
 // In the order they're shown: problems first, the biggest kind of trouble on top.
 const GROUPS: { id: GroupId; title: string; advice: string }[] = [
+  {
+    id: 'crashing',
+    title: 'Keeps crashing',
+    advice:
+      "These had been running fine and now keep crashing; systemd restarts them each time. Healthcheck doesn't stop them. The alert says why, and their history and log say more.",
+  },
   {
     id: 'datasource_down',
     title: "Can't reach the database",
@@ -288,6 +298,8 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
   const { data: softwareList, refetch: refetchSoftware } = useGroupSoftware(id);
   const { data: suggestions, refetch: refetchSuggestions } = useSuggestions(id);
   const { data: status, refetch: refetchStatus } = useGroupStatus(id);
+  // services that had been running fine and keep crashing (the same alerts the popup shows)
+  const { data: beatAlerts } = useBeatAlerts();
   const now = useNow(30000);
   const can = useCan();
 
@@ -425,6 +437,9 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
   }
 
   const statusBySoftware = new Map((status?.items ?? []).map((i) => [i.software_id, i]));
+  const crashBySoftware = new Map(
+    (beatAlerts?.alerts ?? []).filter((a) => a.kind === 'crash' && a.server_id === server.id && a.crash).map((a) => [a.software_id, a]),
+  );
   const ordered = [...(softwareList ?? [])].sort((a: any, b: any) => a.sequence_order - b.sequence_order);
   const logSoftware = allSoftware?.find((s: any) => s.id === logSoftwareId);
 
@@ -432,13 +447,15 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
     const st = statusBySoftware.get(item.software_id);
     const sv = st?.servers?.[0];
     const state = st?.state ?? 'unknown';
-    const view = STATE_VIEW[state] ?? STATE_VIEW.unknown;
+    const crash = crashBySoftware.get(item.software_id) ?? null;
+    const view = crash ? CRASHING_VIEW : (STATE_VIEW[state] ?? STATE_VIEW.unknown);
     const datasources = state === 'datasource_down' && sv?.detail ? sv.detail.split(',') : [];
     return {
       id: item.software_id as number,
       name: item.software.name as string,
       state,
       view,
+      crash,
       datasources,
       // a closed database warning comes back if a different set of datasources starts failing
       alertKey: `${server.id}|${item.software.name}|${[...datasources].sort().join(',')}`,
@@ -506,6 +523,15 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
         <StateIcon tone={s.view.tone} />
         <div className="sv-main">
           <div className="sv-name">{s.name}</div>
+          {s.crash?.crash && (
+            <div className="sv-state">
+              {s.crash.state === 'gave_up' ? 'Down: crashed' : 'Crashed'} {s.crash.crash.count} times since{' '}
+              {new Date(s.crash.crash.first_crash_at).toDateString() === new Date().toDateString()
+                ? new Date(s.crash.crash.first_crash_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+                : new Date(s.crash.crash.first_crash_at).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}
+              {s.crash.crash.reason ? `. ${s.crash.crash.reason}` : ''}
+            </div>
+          )}
           {s.state === 'not_ready' && s.rawDetail && <div className="sv-state">{s.rawDetail}</div>}
           {s.datasources.length > 0 && !showDsCallout && (
             <div className="sv-state">

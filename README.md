@@ -101,6 +101,10 @@ The settings, as the file lists them:
 | `HOST` | `127.0.0.1` | Interface to bind to. Change to a LAN IP if you need to reach it from another machine. |
 | `HEARTBEAT_INTERVAL_CRON` | `0 */2 * * *` | Cron expression for the background status check (the "heartbeat") — every 2 hours by default, to keep SSH logins on the servers low. The "every …" text on the server page follows it in the `*/N * * * *` (minutes) and `0 */N * * *` (hours) forms. |
 | `SERVICE_HISTORY_DAYS` | `30` | How many days of service history (starts, stops, errors) to keep. |
+| `CRASH_CHECK_CRON` | `0 * * * *` | How often to look for services that keep crashing (every hour). See *Crash alerts*. |
+| `CRASH_ALERT_COUNT` | `3` | Crashes in a row, of a service that had been running fine, before the alert. |
+| `CRASH_RUNNING_FINE_MINUTES` | `20` | A service counts as running fine once it has been up this long; crashes sooner after a start never raise an alert. |
+| `CRASH_LOOP_MINUTES` | `60` | Crashes less than this long after systemd restarted the service count as one run (one alert, one "Kept crashing" history entry). |
 | `START_ATTEMPTS` | `3` | Start / Restart All: how many times to try a component that crashes on start before pausing to ask you. |
 | `START_RETRY_DELAY_S` | `5` | Seconds to wait between those attempts. |
 | `PORT_RELEASE_WAIT_S` | `30` | A start that fails because a port is already in use waits this long for the port to be released (a previous instance may still be shutting down) before it gives up and names who holds it. |
@@ -827,6 +831,42 @@ to**, **Blocked from starting**). Each entry says who did it:
 - **Journals that don't survive a restart:** some servers (loyalty_1 among them) keep the journal only in
   memory, so what happened between the last read and a restart is lost; the history window says so. To keep
   it across restarts: `sudo mkdir -p /var/log/journal && sudo systemctl restart systemd-journald`.
+
+### Crash alerts
+
+When a service that **had been running fine** starts crashing over and over, Healthcheck raises an alert. It
+**never stops the service**. The alert says how many times it crashed, why, and how the server looks:
+
+- **A popup** for everyone with Healthcheck open, for example: "voucher-backend keeps crashing: 14 times since
+  2:17 PM, the last at 2:55 PM. It had been running fine for 3 days before. **Why:** The database password has
+  expired." It also shows the server's disks and memory, and **Show the error from its log**. Dismissed, it
+  comes back at the next check if the service is still crashing.
+- **On the server page** the service moves to the top, under **Needs attention → Keeps crashing**, with the
+  count and the reason, and counts as "With a problem".
+
+**When:** a service that had been up for at least `CRASH_RUNNING_FINE_MINUTES` (20) crashes `CRASH_ALERT_COUNT`
+(3) times in a row, each crash less than `CRASH_LOOP_MINUTES` (60) after systemd restarted it. Only that case:
+- **No alert for crashes right after a start**: the server starting up, someone starting it from a terminal, or a
+  Start in Healthcheck (Healthcheck's own starts already try 3 times, then stop it and show the error).
+- **No alert for a single crash**, or a crash that someone caused (a stop, a `kill`).
+
+**Checked:** every hour (`CRASH_CHECK_CRON`), and at every background check, Check status and run. The check
+reads the service history from the journal, so it needs journal access (see [Service history](#service-history)).
+
+**The reason** comes from the service's log file (its log path in the Software Catalog) or, if it writes to the
+journal, from that: the last error, from the crash's first `ERROR` line, with the stack trace cut down to what
+says why. It's put in plain words when it's a known case: an expired or wrong database password, a database or
+broker it can't reach, its port taken by another program, out of memory, a full disk, missing or broken program
+files, a file it may not read. Otherwise it says how it ends ("exit code 1") with the error below.
+
+**The server's state:** free space on `/`, `/Data`, `/var`, `/tmp` and the log's folder, free memory, and whether
+the kernel killed processes for lack of memory since the crashes began. A disk 90% full or more, or under 10%
+memory free, is shown in red. All read-only; read again at most every 10 minutes while it keeps crashing.
+
+**When it ends:**
+- **Someone starts or stops it** (in Healthcheck or a terminal): the alert closes.
+- **It runs fine again** for `CRASH_RUNNING_FINE_MINUTES`: the alert closes.
+- **systemd gives up** restarting it: the alert stays, saying it's down, until someone starts it.
 
 ### Logs
 

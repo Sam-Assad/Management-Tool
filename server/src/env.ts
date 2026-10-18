@@ -81,6 +81,39 @@ export const SETTINGS: { title: string; settings: Setting[] }[] = [
     ],
   },
   {
+    title: 'Crash alerts',
+    settings: [
+      {
+        key: 'CRASH_CHECK_CRON',
+        value: '0 * * * *',
+        about:
+          'How often Healthcheck looks for services that keep crashing, as cron: every hour. It also looks at every background check, every Check status and after each run.',
+        recommended: true,
+      },
+      {
+        key: 'CRASH_ALERT_COUNT',
+        value: '3',
+        about:
+          'A service that had been running fine raises an alert once it has crashed this many times in a row (systemd restarting it each time). Healthcheck never stops it: the alert says how many times and why.',
+        recommended: true,
+      },
+      {
+        key: 'CRASH_RUNNING_FINE_MINUTES',
+        value: '20',
+        about:
+          'A service counts as running fine once it has been up this many minutes. Crashes sooner after a start (the server starting up, a start from a terminal or from Healthcheck) never raise an alert.',
+        recommended: true,
+      },
+      {
+        key: 'CRASH_LOOP_MINUTES',
+        value: '60',
+        about:
+          'Crashes less than this many minutes after systemd restarted the service count as one run of crashes: one alert, and one "Kept crashing" entry in its history.',
+        recommended: true,
+      },
+    ],
+  },
+  {
     title: 'Start / Restart All',
     settings: [
       { key: 'START_ATTEMPTS', value: '3', about: 'How many times to try a component that crashes on start before stopping to ask you.', recommended: true },
@@ -259,6 +292,12 @@ export const env = {
   heartbeatCron: str('HEARTBEAT_INTERVAL_CRON'),
   // service history (starts, stops, crashes) is kept this many days
   serviceHistoryDays: num('SERVICE_HISTORY_DAYS', 1),
+  // crash alerts (scan/crashAlerts.ts): how often to look, how many crashes in a row, after how long running
+  // a service counts as fine, and how close together crashes must be to count as one run
+  crashCheckCron: str('CRASH_CHECK_CRON'),
+  crashAlertCount: num('CRASH_ALERT_COUNT', 1),
+  crashRunningFineMinutes: num('CRASH_RUNNING_FINE_MINUTES', 0),
+  crashLoopMinutes: num('CRASH_LOOP_MINUTES', 1),
   // Start All / Restart All: how many times to try a component that keeps crashing before asking you
   startAttempts: num('START_ATTEMPTS', 1),
   startRetryDelayS: num('START_RETRY_DELAY_S', 0),

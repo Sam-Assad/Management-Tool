@@ -191,6 +191,29 @@ CREATE TABLE IF NOT EXISTS service_events (
 
 CREATE INDEX IF NOT EXISTS idx_service_events_pair ON service_events(server_id, software_id, at);
 
+-- A service that had been running fine and keeps crashing (scan/crashAlerts.ts): one row per run of crashes,
+-- kept up to date at each read, with why (from its log) and what the server looked like (disk, memory).
+CREATE TABLE IF NOT EXISTS crash_alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  software_id INTEGER NOT NULL,
+  first_crash_at TEXT NOT NULL,
+  last_crash_at TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  ran_for_s INTEGER,
+  state TEXT NOT NULL,
+  detail TEXT,
+  reason TEXT,
+  excerpt TEXT,
+  facts TEXT,
+  looked_at TEXT,
+  ended_at TEXT,
+  ended_how TEXT,
+  opened_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(server_id, software_id, first_crash_at)
+);
+
 -- Per server: how its history is read ('journal' or 'snapshot'), and for the journal, where the last read
 -- stopped and what it had half seen (scan/journal.ts JState, as JSON).
 CREATE TABLE IF NOT EXISTS history_state (
@@ -262,6 +285,9 @@ ensureColumn('service_events', 'sessions', 'TEXT');
 ensureColumn('service_events', 'probable', 'INTEGER');
 ensureColumn('service_events', 'count', 'INTEGER');
 ensureColumn('service_events', 'until_at', 'TEXT');
+// a crash nobody asked for: how long the service had been running before it (seconds; null = since before
+// Healthcheck first looked) - "had been running fine" decides whether repeated crashes raise an alert
+ensureColumn('service_events', 'ran_for_s', 'INTEGER');
 // an admin's authenticator app, for "Forgot password" (see auth/totp.ts): the secret, encrypted with master.key;
 // one being set up but not yet confirmed with a code; the last code's time step (each code works once); when it
 // was set up
