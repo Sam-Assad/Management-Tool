@@ -300,12 +300,9 @@ export default function ServersDashboard() {
           <h2>Welcome back</h2>
           <p>
             {list.length === 0
-              ? 'Add your first server to start, restart and stop the Loyalty platform in the right order.'
+              ? 'Add your first server (Add server, below) to start, restart and stop the Loyalty platform in the right order.'
               : `${list.length} server${list.length === 1 ? '' : 's'} and ${components.length} components under control. Start, restart and stop them in the right order.`}
           </p>
-          <button className="primary" onClick={() => setShowAdd(true)} disabled={!can('manage_servers')} title={can('manage_servers') ? undefined : NO_PERMISSION}>
-            <IconPlus size={14} /> Add server
-          </button>
         </div>
 
         <div className="dash-card">

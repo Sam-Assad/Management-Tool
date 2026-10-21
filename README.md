@@ -266,10 +266,10 @@ How it's protected:
 
 ### Servers
 
-The landing page (**Fleet overview**) has three panels on top — a welcome card with **Add server**, a
+The landing page (**Fleet overview**) has three panels on top — a welcome card, a
 **Fleet health** donut (the share of components running across all servers, with Running / Stopped /
 Problems counts) and **Recent activity** (the latest jobs; click one to open its server) — and below them
-your **servers**, each with its connection status, how many components are running, and a chip per
+your **servers** (with **Add server** next to the heading), each with its connection status, how many components are running, and a chip per
 installed component. The white bar at the top of every page finds a server by name (type, then Enter) and
 shows how many components are running overall; the sidebar's **Add server** button works from any page.
 Open a server to control it: everything on its page —
