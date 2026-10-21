@@ -12,7 +12,7 @@ Object.assign(process.env, { HEALTHCHECK_DATA_DIR: dataDir });
 const { sqlite } = await import('../server/src/db/client.ts');
 const { createApp } = await import('../server/src/app.ts');
 const { hashPassword } = await import('../server/src/auth/passwords.ts');
-const { probeTcp, usernameProblem, hostProblem } = await import('../server/src/ssh/explain.ts');
+const { probeTcp, tcpErrorResult, explainTcp, usernameProblem, hostProblem } = await import('../server/src/ssh/explain.ts');
 const { bootstrapServerWithPassword } = await import('../server/src/ssh/passwordBootstrap.ts');
 const { ensureAppKeypair } = await import('../server/src/ssh/keyManager.ts');
 
@@ -45,6 +45,12 @@ try {
   check('an open port: open', (await probeTcp('127.0.0.1', silentPort)) === 'open');
   check('a closed port: refused', (await probeTcp('127.0.0.1', closedPort)) === 'refused');
   check('a name that doesn\'t exist: unknown host', (await probeTcp('no-such-server.invalid', 22)) === 'unknown_host');
+  // "no route to host" (needs a real network to happen, so the timings measured on loyalty_1's network are used)
+  check('"no route to host" at once (loyalty_1\'s firewall on port 22, 1 ms): blocked', tcpErrorResult('EHOSTUNREACH', 'x', 2) === 'blocked');
+  check('...after ~3 s (nothing at that address): no route', tcpErrorResult('EHOSTUNREACH', 'x', 3100) === 'no_route');
+  check('...this machine has no route to that network: no route, however fast', tcpErrorResult('ENETUNREACH', 'x', 1) === 'no_route');
+  const blocked = explainTcp('blocked', '192.168.122.5', 22);
+  check('blocked: "blocks connections on port 22", says the password wasn\'t tried, and to check the port and firewall', blocked.title === '192.168.122.5 blocks connections on port 22' && /password weren't tried/.test(blocked.why) && /SSH port/.test(blocked.fix) && /firewall/.test(blocked.fix), blocked);
 
   // ---- typos are caught before anything is tried
   const typo = usernameProblem('svc_user`');

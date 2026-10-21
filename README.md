@@ -348,7 +348,8 @@ plain connection to the SSH port, which tells the usual causes apart:
 |---|---|
 | "The user name “svc_user`” has “`” in it" | A typo (flagged while typing, too). Nothing is tried. |
 | "There's no server called …" | The name is misspelt or unknown here: use the IP address. |
-| "… can't be reached from this machine" | Another network, or a wrong address (no route). |
+| "… can't be reached from this machine" | Nothing answers at that address: switched off, a wrong address, or another network. |
+| "… blocks connections on port 22" | The server is there, but its firewall rejects that port: usually SSH is on another port there, or the firewall doesn't allow this machine. The password isn't tried. |
 | "… doesn't answer on port 22" | Wrong address, the server is off, or a firewall drops this machine. |
 | "… refused the connection on port 22" | The server is on, but SSH isn't on that port (or sshd isn't running). |
 | "… answers on port 22, but not like an SSH server" | Not the SSH port, or something in between holds the connection. |

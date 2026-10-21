@@ -6,7 +6,7 @@
 // is off and a firewall alike), so a plain TCP connection to the SSH port is tried first: it tells those apart.
 import net from 'node:net';
 
-export type ProblemKind = 'bad_input' | 'unknown_host' | 'no_route' | 'no_answer' | 'refused' | 'not_ssh' | 'closed' | 'auth_failed' | 'key_install' | 'other';
+export type ProblemKind = 'bad_input' | 'unknown_host' | 'no_route' | 'blocked' | 'no_answer' | 'refused' | 'not_ssh' | 'closed' | 'auth_failed' | 'key_install' | 'other';
 
 export interface ConnectionProblem {
   kind: ProblemKind;
@@ -16,13 +16,27 @@ export interface ConnectionProblem {
   technical: string; // the raw message, for whoever looks into it
 }
 
-export type TcpResult = 'open' | 'refused' | 'timeout' | 'no_route' | 'unknown_host' | { other: string };
+export type TcpResult = 'open' | 'refused' | 'timeout' | 'no_route' | 'blocked' | 'unknown_host' | { other: string };
 
 const TCP_TIMEOUT_MS = 5000;
+// "No route to host" means two things on Linux. Nothing at the address: it comes after ~3 s, once the search for
+// the machine (ARP) gives up. A firewall rejecting the port (firewalld's default on Rocky / RHEL answers with
+// "host prohibited"): it comes at once, because the server itself answered. So a quick one is a blocked port.
+const FAST_REJECT_MS = 1000;
+
+export function tcpErrorResult(code: string, message: string, elapsedMs: number): TcpResult {
+  if (code === 'ECONNREFUSED') return 'refused';
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'EAI_NONAME') return 'unknown_host';
+  if (code === 'EHOSTUNREACH' || code === 'EHOSTDOWN') return elapsedMs < FAST_REJECT_MS ? 'blocked' : 'no_route';
+  if (code === 'ENETUNREACH') return 'no_route'; // this machine's own routes: no server involved
+  if (code === 'ETIMEDOUT') return 'timeout';
+  return { other: `${code || 'error'}: ${message}` };
+}
 
 // Can this machine open a connection to host:port at all?
 export function probeTcp(host: string, port: number, timeoutMs = TCP_TIMEOUT_MS): Promise<TcpResult> {
   return new Promise((resolve) => {
+    const started = Date.now();
     const socket = net.connect({ host, port });
     let done = false;
     const finish = (r: TcpResult) => {
@@ -34,14 +48,7 @@ export function probeTcp(host: string, port: number, timeoutMs = TCP_TIMEOUT_MS)
     };
     const timer = setTimeout(() => finish('timeout'), timeoutMs);
     socket.once('connect', () => finish('open'));
-    socket.once('error', (err: any) => {
-      const code = String(err?.code ?? '');
-      if (code === 'ECONNREFUSED') finish('refused');
-      else if (code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'EAI_NONAME') finish('unknown_host');
-      else if (code === 'EHOSTUNREACH' || code === 'ENETUNREACH' || code === 'EHOSTDOWN') finish('no_route');
-      else if (code === 'ETIMEDOUT') finish('timeout');
-      else finish({ other: `${code || 'error'}: ${String(err?.message ?? err)}` });
-    });
+    socket.once('error', (err: any) => finish(tcpErrorResult(String(err?.code ?? ''), String(err?.message ?? err), Date.now() - started)));
   });
 }
 
@@ -85,9 +92,17 @@ export function explainTcp(r: Exclude<TcpResult, 'open'>, host: string, port: nu
     return {
       kind: 'no_route',
       title: `${host} can't be reached from this machine`,
-      why: 'The network has no way to that address: it is on another network, or the address is wrong.',
-      fix: 'Check the IP address, and that this machine is connected to the same network or VPN as the server.',
+      why: 'Nothing answers at that address: the server is switched off, the address is wrong, or it is on another network.',
+      fix: 'Check the IP address, that the server is running, and that this machine is connected to the same network or VPN as the server.',
       technical: `${host}:${port}: no route to host`,
+    };
+  if (r === 'blocked')
+    return {
+      kind: 'blocked',
+      title: `${host} blocks connections on port ${port}`,
+      why: `The server is there, but its firewall (or one in front of it) turned the connection down at once, so the user name and password weren't tried. Usually SSH is on a different port on this server, or the firewall doesn't let this machine in on port ${port}.`,
+      fix: `Check the server's SSH port with its administrator, and that its firewall lets this machine connect on that port.`,
+      technical: `${host}:${port}: no route to host, answered at once (a firewall rejecting the port)`,
     };
   if (r === 'refused')
     return {
