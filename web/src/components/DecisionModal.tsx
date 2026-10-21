@@ -24,12 +24,15 @@ export type Choice = 'retry' | 'skip' | 'halt' | 'rollback' | 'free_port';
 
 type Tone = 'error' | 'warning';
 
+// The title always says which service on which server: with several servers selected, their questions come one
+// after the other.
 function look(a: Awaiting): { tone: Tone; title: string } {
-  if (a.datasources?.length) return { tone: 'error', title: 'Database connection problem' };
-  if (a.notReady) return { tone: 'error', title: "Can't receive traffic" };
-  if (a.limited) return { tone: 'warning', title: 'Password expired' };
-  if (a.portFix) return { tone: 'warning', title: 'Port already in use' };
-  return { tone: 'error', title: `${a.component} ${a.verb === 'stop' ? "didn't stop" : "didn't start"}` };
+  const where = a.server ? ` on ${a.server}` : '';
+  if (a.datasources?.length) return { tone: 'error', title: `${a.component}${where}: database connection problem` };
+  if (a.notReady) return { tone: 'error', title: `${a.component}${where} can't receive traffic` };
+  if (a.limited) return { tone: 'warning', title: `${a.component}${where}: password expired` };
+  if (a.portFix) return { tone: 'warning', title: `${a.component}${where}: port already in use` };
+  return { tone: 'error', title: `${a.component} ${a.verb === 'stop' ? "didn't stop" : "didn't start"}${where}` };
 }
 
 export function ToneIcon({ tone }: { tone: Tone }) {
@@ -133,8 +136,8 @@ export default function DecisionModal({
                 Roll back
               </button>
               <InfoTip>
-                Stops what this run has started so far, in the stop order, and ends the run. Components that were already
-                running when it began are not touched.
+                Stops what this run has started so far{a.server ? ` on ${a.server}` : ''}, in the stop order, and ends the run.
+                Components that were already running when it began are not touched.
                 {a.rollback.length > 0 && (
                   <>
                     <br />
@@ -150,8 +153,9 @@ export default function DecisionModal({
                 Stop the run
               </button>
               <InfoTip>
-                Ends the run now and starts nothing further. Whatever is already running is left running. If nobody
-                answers within 30 minutes, the run stops by itself.
+                Ends the run{a.server ? ` on ${a.server}` : ''} now and starts nothing further there. Whatever is already
+                running is left running, and runs on other servers carry on. If nobody answers within 30 minutes, the run
+                stops by itself.
               </InfoTip>
             </span>
           )}

@@ -1114,7 +1114,8 @@ async function runGroupSequence(
   let endedAt = 0;
   const inRun = new Set(defs.map((d) => d.id));
   const nameOf = new Map(defs.map((d) => [d.id, d.name]));
-  const label = (server: ServerRow, def: SoftwareDefinition) => (servers.length > 1 ? `${def.name} on ${server.name}` : def.name);
+  // the run's end message names the server too (on the overview several runs end side by side)
+  const label = (server: ServerRow, def: SoftwareDefinition) => `${def.name} on ${server.name}`;
 
   // "Free" = no condition ties it to another component in this run.
   const linked = new Set<number>();
@@ -1194,7 +1195,8 @@ async function runGroupSequence(
       const holdsBack = transitiveDependents(def.id, dependents, inRun)
         .map((id) => nameOf.get(id))
         .filter((n): n is string => Boolean(n));
-      const onServer = servers.length > 1 ? ` on ${server.name}` : '';
+      // always which server: with several selected on the overview, each runs on its own and asks on its own
+      const onServer = ` on ${server.name}`;
       const failedCount = dsFailure ? (dsFailure.names.length === 1 ? 'one of its datasources' : `${dsFailure.names.length} of its datasources`) : '';
       let summary: string;
       if (limited && dsFailure) {

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import pLimit from 'p-limit';
 import { sqlite, insertRow, updateRow } from '../db/client.js';
 import { CreateServerSchema, UpdateServerSchema } from '@healthcheck/shared';
 import { testConnection } from '../ssh/connectionManager.js';
@@ -82,9 +83,8 @@ serversRouter.post(
       password: input.password,
     });
     if (!bootstrap.ok) {
-      return res.status(400).json({
-        error: `Could not connect with that username/password: ${bootstrap.message ?? 'unknown error'}`,
-      });
+      // what happened, why, and what to check (the form shows them at its top)
+      return res.status(400).json({ error: bootstrap.problem?.title ?? bootstrap.message ?? "Couldn't connect", problem: bootstrap.problem ?? null });
     }
 
     const { privateKeyPath } = ensureAppKeypair();
@@ -152,6 +152,33 @@ serversRouter.delete(
       sqlite.prepare('DELETE FROM groups WHERE id = ?').run(server.group_id); // takes its software list with it
     }
     res.status(204).end();
+  })
+);
+
+// Before Start / Restart / Stop All on several servers: which of them can be reached right now (a real sign-in
+// with Healthcheck's key, like a run's first step), and for those that can't, why. Updates each server's badge.
+serversRouter.post(
+  '/servers/reachability',
+  asyncHandler(async (req, res) => {
+    const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter((n: number) => Number.isInteger(n));
+    const servers = ids
+      .map((id: number) => sqlite.prepare('SELECT * FROM servers WHERE id = ?').get(id) as any)
+      .filter(Boolean);
+    const limit = pLimit(5);
+    const results = await Promise.all(
+      servers.map((server: any) =>
+        limit(async () => {
+          const result = await testConnection(server);
+          const status = result.ok ? 'ok' : result.kind === 'auth_failed' ? 'auth_failed' : 'unreachable';
+          updateRow('servers', server.id, {
+            connection_status: status,
+            last_connected_at: result.ok ? new Date().toISOString() : server.last_connected_at,
+          });
+          return { id: server.id, name: server.name, ok: result.ok, problem: result.problem ?? null };
+        }),
+      ),
+    );
+    res.json({ servers: results });
   })
 );
 

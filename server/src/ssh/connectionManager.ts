@@ -2,6 +2,7 @@ import { Client, type ConnectConfig } from 'ssh2';
 import type { Server } from '@healthcheck/shared';
 import { decryptSecret } from '../crypto/secretBox.js';
 import { privateKeyFor } from './keyManager.js';
+import { explainSsh, explainTcp, probeTcp, problemText, type ConnectionProblem } from './explain.js';
 
 type ServerWithSecret = Server & { ssh_passphrase_enc?: string | null };
 
@@ -87,7 +88,15 @@ export async function getConnection(server: ServerWithSecret): Promise<Client> {
 
 export async function testConnection(
   server: ServerWithSecret
-): Promise<{ ok: boolean; kind?: string; message?: string }> {
+): Promise<{ ok: boolean; kind?: string; message?: string; problem?: ConnectionProblem }> {
+  // no open connection to reuse: is the SSH port there at all? (5 s, instead of waiting out SSH's 10)
+  if (!pool.has(server.id)) {
+    const tcp = await probeTcp(server.host, server.port);
+    if (tcp !== 'open') {
+      const problem = explainTcp(tcp, server.host, server.port);
+      return { ok: false, kind: 'unreachable', message: problemText(problem), problem };
+    }
+  }
   try {
     const client = await getConnection(server);
     await new Promise<void>((resolve, reject) => {
@@ -101,8 +110,20 @@ export async function testConnection(
     return { ok: true };
   } catch (err: any) {
     const kind = err instanceof SshConnectionError ? err.kind : 'unreachable';
-    return { ok: false, kind, message: String(err?.message ?? err) };
+    const raw = String(err?.message ?? err);
+    const problem = await explainFailure(server, kind, raw);
+    return { ok: false, kind, message: problemText(problem), problem };
   }
+}
+
+// Why connecting with Healthcheck's key failed: a sign-in refusal says so; anything else, a plain connection to
+// the SSH port tells a wrong address / switched-off server / firewall from a closed port.
+async function explainFailure(server: ServerWithSecret, kind: string, raw: string): Promise<ConnectionProblem> {
+  if (kind === 'auth_failed') return explainSsh(raw, server.host, server.port, server.ssh_username, false);
+  if (/SSH key is missing/.test(raw))
+    return { kind: 'other', title: "Healthcheck's SSH key is missing on this machine", why: raw, fix: 'Copy the data folder (with healthcheck_id_rsa) from the old machine, or add the server again with its password.', technical: raw };
+  const tcp = await probeTcp(server.host, server.port);
+  return tcp === 'open' ? explainSsh(raw, server.host, server.port, server.ssh_username, false) : explainTcp(tcp, server.host, server.port);
 }
 
 export function closeAllConnections() {

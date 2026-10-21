@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -12,8 +13,21 @@ import JobProgressPanel, { KIND_LABEL } from '../components/JobProgressPanel';
 import { useCan } from '../auth/AuthContext';
 import { NO_PERMISSION } from '../auth/permissions';
 import { IconPlus, IconServer } from '../components/Icons';
+import ConnectionProblem, { type ConnectionProblemInfo } from '../components/ConnectionProblem';
+import { ToneIcon } from '../components/DecisionModal';
 
 type BulkAction = 'start' | 'restart' | 'stop';
+const ACTION_LABEL: Record<BulkAction, string> = { start: 'Start All', restart: 'Restart All', stop: 'Stop All' };
+
+type ServerItem = NonNullable<ReturnType<typeof useServerList>['data']>[number];
+
+// one selected server: can it be reached, and if not, why
+interface Reach {
+  id: number;
+  name: string;
+  ok: boolean;
+  problem: ConnectionProblemInfo | null;
+}
 
 // one run started from this page, for one server
 interface Run {
@@ -72,6 +86,69 @@ function ago(iso: string): string {
   return `${Math.floor(hrs / 24)} d ago`;
 }
 
+// Some of the selected servers can't be reached: nothing is done on those. Says which and why, and asks whether
+// the others go ahead.
+function UnreachableDialog({
+  action,
+  reachable,
+  down,
+  onCancel,
+  onContinue,
+}: {
+  action: BulkAction;
+  reachable: ServerItem[];
+  down: Reach[];
+  onCancel: () => void;
+  onContinue: () => void;
+}) {
+  const label = ACTION_LABEL[action];
+  const title =
+    reachable.length === 0
+      ? down.length === 1
+        ? `${down[0].name} can't be reached`
+        : `None of the ${down.length} servers can be reached`
+      : down.length === 1
+        ? `${down[0].name} can't be reached`
+        : `${down.length} of the selected servers can't be reached`;
+  return createPortal(
+    <div className="modal-overlay">
+      <div className="dm-card dm-error ur-card" role="alertdialog" aria-labelledby="ur-title">
+        <ToneIcon tone="error" />
+        <h2 id="ur-title" className="dm-title">{title}</h2>
+        <p className="dm-message">
+          Healthcheck can't connect to {down.length === 1 ? 'it' : 'them'}, so {label} won't be done there. Nothing was
+          started or stopped.
+        </p>
+        <ul className="ur-list">
+          {down.map((d) => (
+            <li key={d.id}>
+              <b className="ur-name">{d.name}</b>
+              {d.problem ? <ConnectionProblem problem={d.problem} compact /> : <p className="cp-why">The connection failed.</p>}
+            </li>
+          ))}
+        </ul>
+        <div className="dm-actions">
+          {reachable.length > 0 && (
+            <button className="dm-btn dm-btn-main" onClick={onContinue}>
+              {label} on {reachable.length === 1 ? reachable[0].name : `the other ${reachable.length}`}
+            </button>
+          )}
+          <button className="dm-btn" onClick={onCancel}>
+            {reachable.length > 0 ? 'Cancel' : 'OK'}
+          </button>
+        </div>
+        {reachable.length > 0 && (
+          <p className="dm-hint">
+            {reachable.length === 1 ? `${reachable[0].name} can be reached.` : `${listNames(reachable.map((s) => s.name))} can be reached.`}{' '}
+            Fix the connection first if {down.length === 1 ? 'that server' : 'those servers'} should be included.
+          </p>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export default function ServersDashboard() {
   const { data: servers, isLoading, isError, error, refetch } = useServerList();
   const { data: jobs } = useRecentJobs(7);
@@ -89,6 +166,9 @@ export default function ServersDashboard() {
   const [runState, setRunState] = useState<Record<number, { running: boolean; asking: boolean }>>({});
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkErrors, setBulkErrors] = useState<string[]>([]);
+  // checking the selected servers can be reached, and the ones that can't (waiting for "go ahead without them?")
+  const [checking, setChecking] = useState(false);
+  const [unreachable, setUnreachable] = useState<{ action: BulkAction; reachable: ServerItem[]; down: Reach[] } | null>(null);
   const runsRef = useRef<HTMLDivElement>(null);
   const reattached = useRef(false);
 
@@ -148,13 +228,47 @@ export default function ServersDashboard() {
     });
   }
 
+  // First: can each selected server be reached right now? A run on one that can't would only fail at its first
+  // step, so it isn't started: the ones that can't are listed with why, and the others go ahead only if you say so.
   async function runOnSelected(action: BulkAction) {
     const targets = selectedServers;
     if (targets.length === 0) return;
+    setBulkBusy(true);
+    setChecking(true);
+    setBulkErrors([]);
+    let reach: Reach[];
+    try {
+      reach = (await api.post<{ servers: Reach[] }>('/servers/reachability', { ids: targets.map((s) => s.id), action })).servers;
+    } catch (err) {
+      setBulkErrors([`Couldn't check whether the servers can be reached: ${errorMessage(err)}`]);
+      setBulkBusy(false);
+      setChecking(false);
+      return;
+    }
+    setChecking(false);
+    queryClient.invalidateQueries({ queryKey: ['servers'] }); // their connection badges
+    const down = reach.filter((r) => !r.ok);
+    const reachable = targets.filter((s) => reach.some((r) => r.id === s.id && r.ok));
+    if (down.length > 0) {
+      setUnreachable({ action, reachable, down });
+      setBulkBusy(false);
+      return;
+    }
+    await startRuns(action, reachable);
+  }
+
+  async function startRuns(action: BulkAction, targets: ServerItem[]) {
     const names = listNames(targets.map((s) => s.name));
     const what = targets.length === 1 ? names : `${targets.length} servers (${names})`;
-    if (action === 'restart' && !confirm(`Restart everything on ${what}, in order?`)) return;
-    if (action === 'stop' && !confirm(`Stop everything on ${what}? This will take ${targets.length === 1 ? 'it' : 'them'} down.`)) return;
+    const go =
+      targets.length > 0 &&
+      (action === 'start' ||
+        (action === 'restart' && confirm(`Restart everything on ${what}, in order?`)) ||
+        (action === 'stop' && confirm(`Stop everything on ${what}? This will take ${targets.length === 1 ? 'it' : 'them'} down.`)));
+    if (!go) {
+      setBulkBusy(false);
+      return;
+    }
 
     setBulkBusy(true);
     setBulkErrors([]);
@@ -283,9 +397,11 @@ export default function ServersDashboard() {
             Select all
           </label>
           <span className="fleet-count">
-            {selectedServers.length === 0
-              ? 'Tick servers to start, restart or stop everything on them at once.'
-              : `${selectedServers.length} of ${list.length} server${list.length === 1 ? '' : 's'} selected`}
+            {checking
+              ? `Checking that ${selectedServers.length === 1 ? 'the server' : `the ${selectedServers.length} servers`} can be reached…`
+              : selectedServers.length === 0
+                ? 'Tick servers to start, restart or stop everything on them at once.'
+                : `${selectedServers.length} of ${list.length} server${list.length === 1 ? '' : 's'} selected`}
           </span>
           <span className="fleet-actions">
             <span className="with-info">
@@ -402,6 +518,18 @@ export default function ServersDashboard() {
           ))}
         </ol>
       </details>
+
+      {unreachable && (
+        <UnreachableDialog
+          {...unreachable}
+          onCancel={() => setUnreachable(null)}
+          onContinue={() => {
+            const { action, reachable } = unreachable;
+            setUnreachable(null);
+            void startRuns(action, reachable);
+          }}
+        />
+      )}
 
       {showAdd && (
         <AddServerModal

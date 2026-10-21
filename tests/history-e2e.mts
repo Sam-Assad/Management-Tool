@@ -36,14 +36,17 @@ const server = sqlite.prepare('SELECT * FROM servers WHERE id = 1').get() as any
 
 // what `grep btime /proc/stat; date +%s; systemctl show ...` prints. Times are "seconds ago" on the server's clock.
 type U = { id: string; load?: string; active: string; result?: string; nr?: number; code?: number; status?: number; startedAgo?: number | null; stoppedAgo?: number | null };
-let BOOT = Math.floor(Date.now() / 1000) - 100_000;
+const T0S = Math.floor(Date.now() / 1000);
+let BOOT = T0S - 100_000;
 let SKEW = 0; // server clock minus this machine's, in seconds
 let BOOT_ID = '1b4e28ba-2fa1-11d2-883f-0016d3cca427';
 function output(units: U[]): string {
   const serverNow = Math.floor(Date.now() / 1000) + SKEW;
   // btime is the boot moment on the server's own clock, so it moves with that clock
   const btime = BOOT + SKEW;
-  const mono = (ago: number | null | undefined) => (ago == null ? 0 : (serverNow - ago - btime) * 1_000_000);
+  // "seconds ago" counts from one fixed moment, the test's start: two reads either side of a second boundary
+  // must describe the same start time, or it would look like a new start
+  const mono = (ago: number | null | undefined) => (ago == null ? 0 : (T0S + SKEW - ago - btime) * 1_000_000);
   const blocks = units.map((u) =>
     [
       `Id=${u.id}`,

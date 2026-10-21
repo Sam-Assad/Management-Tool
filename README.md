@@ -280,10 +280,20 @@ server only.
 **Select all** and **Start All / Restart All / Stop All** for the ticked servers. Each ticked server gets its
 own run, exactly the one its own page's button would start: only the catalog services installed on that
 server, in its own order and with the same checks (WildFly's datasource and traffic checks included). The
-servers run side by side, and there's no order *between* servers. Restart All and Stop All ask for
-confirmation first, naming the servers. Each run gets its own progress panel on the overview, titled with
-its server. If several runs need an answer at the same time, their questions pop up **one at a time**, and
-the others wait in their panel ("this one pops up as soon as that one is answered"). A server that already
+servers run side by side, and there's no order *between* servers.
+
+- **First, each ticked server is checked** ("Checking that the 3 servers can be reached…"): Healthcheck signs
+  in to it, as a run's first step would. A server that can't be reached **gets no run**. A window lists each one
+  with why (for example "192.168.122.6 doesn't answer on port 22") and what to check, and asks whether the
+  others go ahead: **Start All on the other 2** or **Cancel**. When none can be reached it only says so.
+- Restart All and Stop All then ask for confirmation, naming the servers.
+- Each run gets its own progress panel on the overview, titled with its server. A run's question names the
+  service **and the server** ("Artemis didn't start on loyalty_1"), with the usual buttons: **Try again**,
+  **Continue without it**, **Roll back** and **Stop the run** (those two act on that server's run only). If several
+  runs need an answer at the same time, their questions pop up **one at a time**, and the others wait in their
+  panel ("this one pops up as soon as that one is answered").
+
+A server that already
 has a run going is refused with the usual "A job is already running on this server" message, which is listed by server name,
 and the other servers still go ahead. Leaving the page and coming back shows the runs still going.
 
@@ -330,6 +340,23 @@ Healthcheck generates its own SSH keypair the first time it's needed (stored in
 the data directory), connects with the password, appends its public key to
 `~/.ssh/authorized_keys` on that server, and uses that key for every connection
 from then on. **The password itself is never stored.** If the connection fails, nothing is created.
+
+**When it can't connect**, the form says why at its top, in plain words, with what to check. It first tries a
+plain connection to the SSH port, which tells the usual causes apart:
+
+| The form says | Usually |
+|---|---|
+| "The user name “svc_user`” has “`” in it" | A typo (flagged while typing, too). Nothing is tried. |
+| "There's no server called …" | The name is misspelt or unknown here: use the IP address. |
+| "… can't be reached from this machine" | Another network, or a wrong address (no route). |
+| "… doesn't answer on port 22" | Wrong address, the server is off, or a firewall drops this machine. |
+| "… refused the connection on port 22" | The server is on, but SSH isn't on that port (or sshd isn't running). |
+| "… answers on port 22, but not like an SSH server" | Not the SSH port, or something in between holds the connection. |
+| "The server refused that user name or password" | Wrong user or password, or password sign-in isn't allowed for the account. |
+| "Signed in, but Healthcheck's key couldn't be saved" | The account can't write its `~/.ssh/authorized_keys`. |
+
+The raw message is under **Show the technical detail**. **Test connection** on a server's page explains a
+failure the same way.
 
 The moment the connection succeeds, Healthcheck checks the software catalog against that
 server and automatically adds every component whose systemd unit is **installed** there —

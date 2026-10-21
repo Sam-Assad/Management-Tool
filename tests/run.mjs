@@ -20,6 +20,7 @@ const SUITES = {
     'reset-e2e', // the one-time reset link from the command line
     'perm-split', // the "Check status" permission split for older databases
     'traffic-parse-test', // reading WildFly's readiness / traffic answers
+    'connect-e2e', // why a connection failed (Add server, Test connection, the check before a run on several servers)
     'fresh-install', // a market's first start, in a browser (needs Chrome: CHROME_PATH if it isn't in the usual place)
   ],
   live: ['perm-e2e'],

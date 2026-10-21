@@ -99,6 +99,12 @@ const RULES: { method: string; path: RegExp; permission: Permission | ((req: Req
   { method: 'POST', path: /^\/groups\/\d+\/scan$/, permission: 'check_status' },
   { method: 'POST', path: /^\/servers\/\d+\/artemis-check$/, permission: 'run_checks' },
   { method: 'POST', path: /^\/servers\/\d+\/test-connection$/, permission: 'run_checks' },
+  // the check before Start / Restart / Stop All on several servers: whoever may run that one
+  {
+    method: 'POST',
+    path: /^\/servers\/reachability$/,
+    permission: (req) => ({ start: 'start_all', restart: 'restart_all', stop: 'stop_all' } as const)[req.body?.action as 'start'] ?? 'start_all',
+  },
   // answering a run's question / vouching for a step: whoever may start that kind of run
   { method: 'POST', path: /^\/jobs\/\d+\/(decision|steps\/\d+\/accept)$/, permission: (req) => jobPermission(Number(req.path.split('/')[2])) },
   { method: 'GET', path: /^\/servers\/\d+\/software\/\d+\/logs(\/stream)?$/, permission: 'view_logs' },

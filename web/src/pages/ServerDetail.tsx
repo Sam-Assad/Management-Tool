@@ -29,6 +29,7 @@ import { useCan } from '../auth/AuthContext';
 import { NO_PERMISSION, type Permission } from '../auth/permissions';
 import RowMenu from '../components/RowMenu';
 import ServiceHistory from '../components/ServiceHistory';
+import ConnectionProblem, { type ConnectionProblemInfo } from '../components/ConnectionProblem';
 import { intervalText } from '../api/hooks';
 import '../styles/server-page.css';
 import LogViewer from '../components/LogViewer';
@@ -337,6 +338,8 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
   };
   const [technical, setTechnical] = useState(() => readFlag('hc-technical-view'));
   const [actionError, setActionError] = useState<string | null>(null);
+  // Test connection failed: why, and what to check
+  const [connProblem, setConnProblem] = useState<ConnectionProblemInfo | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>((location.state as any)?.notice ?? null);
   // a job is running (or paused, waiting for an answer): starting another one on this server is refused
   const [jobRunning, setJobRunning] = useState(false);
@@ -344,8 +347,8 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
 
   // a message or job panel that appears below the fold would go unnoticed - bring it into view
   useEffect(() => {
-    if (actionError || activeJobId) feedbackRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }, [actionError, activeJobId]);
+    if (actionError || connProblem || activeJobId) feedbackRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [actionError, connProblem, activeJobId]);
 
   // Coming back to the page (or reloading it) while a run is still going - or paused waiting for an
   // answer - re-attaches to it, so it can never be left orphaned and locking the server.
@@ -411,9 +414,11 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
   async function handleTestConnection() {
     setActionError(null);
     setActionNotice(null);
+    setConnProblem(null);
     try {
       const result = await testConnection.mutateAsync(server.id);
       if (result.ok) setActionNotice('Connection OK.');
+      else if (result.problem) setConnProblem(result.problem);
       else setActionError(result.message ?? 'Connection test failed');
       onServerChanged();
     } catch (err) {
@@ -725,6 +730,12 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
       </div>
 
       <div ref={feedbackRef} className="sv-feedback">
+        {connProblem && (
+          <div className="cp-panel">
+            <ConnectionProblem problem={connProblem} />
+            <button onClick={() => setConnProblem(null)}>Dismiss</button>
+          </div>
+        )}
         {actionError && (
           <div className="alert alert-bad" role="alert">
             <span>{actionError}</span>
