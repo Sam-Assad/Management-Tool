@@ -34,6 +34,8 @@ export const CreateSoftwareDefinitionSchema = z.object({
   success_pattern: z.string().optional().nullable(),
   error_pattern: z.string().optional().nullable(),
   health_timeout_s: z.number().int().min(1).default(120),
+  needs_database: z.number().int().min(0).max(1).default(0),
+  needs_artemis: z.number().int().min(0).max(1).default(0),
 });
 
 export const SetGroupSoftwareSchema = z.object({

@@ -47,7 +47,7 @@ try {
   let text = fs.readFileSync(file, 'utf8');
   let parsed = dotenv.parse(text);
   check('no file: Healthcheck writes it', r.status.created === true && fs.existsSync(file), r.status);
-  check('...with all 32 settings, each with a comment and a "# Default:" line', Object.keys(parsed).length === 32 && (text.match(/^# Default: /gm) ?? []).length === 32, Object.keys(parsed).length);
+  check('...with all 34 settings, each with a comment and a "# Default:" line', Object.keys(parsed).length === 34 && (text.match(/^# Default: /gm) ?? []).length === 34, Object.keys(parsed).length);
   check('...the recommended defaults are marked', /# Default: 127\.0\.0\.1 \(recommended\)\nHOST=127\.0\.0\.1/.test(text) && /# Default: 30 \(recommended\)\nSERVICE_HISTORY_DAYS=30/.test(text));
   check('...and the values in use are the defaults', r.env.port === 4000 && r.env.host === '127.0.0.1' && r.env.heartbeatCron === '0 */2 * * *' && r.env.serviceHistoryDays === 30 && r.env.publicUrl === 'http://localhost:4000', r.env);
   check('...data and catalog default to the Healthcheck folder', r.env.dataDir === path.join(root, 'server/data') && r.env.defaultsFile === path.join(root, 'server/defaults/defaults.json'), [r.env.dataDir, r.env.defaultsFile]);
@@ -68,7 +68,7 @@ try {
   r = run();
   text = fs.readFileSync(file, 'utf8');
   parsed = dotenv.parse(text);
-  check('an incomplete file: the missing settings are added', r.status.added.length === 28 && r.status.added.includes('HOST') && !r.status.added.includes('PORT'), r.status);
+  check('an incomplete file: the missing settings are added', r.status.added.length === 30 && r.status.added.includes('HOST') && !r.status.added.includes('PORT'), r.status);
   check('...the values it had are kept (a password with #, quotes and a space; a Windows path)', parsed.ARTEMIS_PASSWORD === "pa#ss 'w'" && parsed.PORT === '4200' && parsed.HEALTHCHECK_DATA_DIR === 'D:\\HealthcheckData', parsed);
   check('...a setting this version doesn\'t know is kept, at the end, marked as unused', /# ==== Not used by this version of Healthcheck[^\n]*\n\nHEALTHCHECK_PASSWORD=old\n$/.test(text), text.slice(-120));
   check('...in the defined order (PORT before HOST before ARTEMIS_PASSWORD)', text.indexOf('PORT=4200') < text.indexOf('HOST=') && text.indexOf('HOST=') < text.indexOf('ARTEMIS_PASSWORD='));
@@ -92,7 +92,7 @@ try {
   fs.writeFileSync(file, 'ARTEMIS_PASSWORD=\nPORT=4500\n');
   const cli = spawnSync(process.execPath, [tsx, path.join(root, 'server/src/cli/settings.ts')], { encoding: 'utf8', cwd: os.tmpdir() });
   parsed = dotenv.parse(fs.readFileSync(file, 'utf8'));
-  check('`npm run settings`: the file gets every setting, values kept', Object.keys(parsed).length === 32 && parsed.PORT === '4500', Object.keys(parsed).length);
+  check('`npm run settings`: the file gets every setting, values kept', Object.keys(parsed).length === 34 && parsed.PORT === '4500', Object.keys(parsed).length);
   check('...and says where the file is and that the Artemis password is empty', cli.stdout.includes(file) && /ARTEMIS_PASSWORD is empty/.test(cli.stdout), cli.stdout);
 } finally {
   try {

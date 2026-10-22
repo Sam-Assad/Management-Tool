@@ -74,6 +74,7 @@ export const KIND_LABEL: Record<string, string> = {
   stop_all: 'Stop All',
   stop_one: 'Stop',
   scan: 'Check status',
+  clear_dlq: 'Clear DLQ',
 };
 
 const STEP_LABEL: Record<string, string> = {
@@ -92,10 +93,12 @@ function firstLine(text: string | null): string {
 function stateLabel(step: Step, isScan: boolean): string {
   if (isScan && step.status === 'failed') {
     if (step.log_excerpt?.startsWith("running, but can't receive traffic")) return 'no traffic';
+    if (step.log_excerpt?.startsWith('running, but not working')) return 'not working';
     return step.log_excerpt?.startsWith('running, but') ? 'database problem' : 'not running';
   }
   if (step.status === 'healthy' && (step.action === 'stop' || step.action === 'rollback')) return 'stopped';
   if (step.status === 'healthy' && step.action === 'free_port') return 'freed';
+  if (step.status === 'healthy' && step.action === 'clear_dlq') return 'cleared';
   return STEP_LABEL[step.status] ?? step.status;
 }
 

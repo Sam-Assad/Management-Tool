@@ -20,6 +20,9 @@ const SUITES = {
     'reset-e2e', // the one-time reset link from the command line
     'perm-split', // the "Check status" permission split for older databases
     'traffic-parse-test', // reading WildFly's readiness / traffic answers
+    'unit-state-test', // what systemd's state means: a normal stop of a Java service isn't an error
+    'artemis-dlq-test', // Clear DLQ: reading the broker's answer, admins only, one run at a time
+    'service-health-test', // can a running service do its job: connections it needs, a jar's port, its log
     'connect-e2e', // why a connection failed (Add server, Test connection, the check before a run on several servers)
     'fresh-install', // a market's first start, in a browser (needs Chrome: CHROME_PATH if it isn't in the usual place)
   ],

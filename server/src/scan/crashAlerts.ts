@@ -1,8 +1,10 @@
-// Crash alerts: a service that had been running fine (up CRASH_RUNNING_FINE_MINUTES or more) and now keeps
-// crashing - CRASH_ALERT_COUNT crashes in a row, systemd restarting it each time. Only that case: crashes soon after
-// a start (the server starting up, a start from a terminal or from Healthcheck) never raise one, and Healthcheck's
-// own starts already deal with their crashes. Healthcheck never stops the service: the alert says how many times,
-// why (the error from its log, in plain words where possible) and how the server looks (disk, memory).
+// Crash alerts: a service that keeps crashing, systemd restarting it each time. Two cases:
+// - it had been running fine (up CRASH_RUNNING_FINE_MINUTES or more): CRASH_ALERT_COUNT crashes in a row;
+// - it crashes right after a start (the server starting up, a terminal, systemd): CRASH_START_ALERT_COUNT in a row.
+//   Never after a start in Healthcheck: its own starts already deal with their crashes (retry, stop, ask).
+// Healthcheck never stops the service by itself: the alert says how many times, why (the error from its log, in
+// plain words where possible) and how the server looks (disk, memory), and has a Stop button. Stopped that way, the
+// alert stays as 'stopped' (the server page says why it's down) until someone starts the service again.
 //
 // Built from the service history after every read of it (each background check, Check status, run, and the hourly
 // crash check): journal.ts already groups a run of crashes into one "Kept crashing" entry, with how long the
@@ -16,9 +18,9 @@ import { env } from '../env.js';
 import { runCommand } from '../ssh/exec.js';
 import { unitNames } from './detectors.js';
 import { CREDENTIAL_EXPIRED_RE } from './wildfly.js';
-import { PORT_CONFLICT_RE } from './ports.js';
+import { PORT_CONFLICT_RE, extractPorts, findPortHolders, type PortHolder } from './ports.js';
 
-export type CrashState = 'crashing' | 'gave_up' | 'over';
+export type CrashState = 'crashing' | 'gave_up' | 'stopped' | 'over';
 
 export interface CrashFacts {
   disks: { mount: string; sizeKb: number; availKb: number; usedPct: number }[];
@@ -44,16 +46,24 @@ interface After {
   kind: string;
   source: string;
   actor: string | null;
+  job_id: number | null;
   job_kind: string | null;
   at: string;
 }
 
-// How a run of crashes stands now: still crashing, systemd gave up on it (down, needs a person), or over (someone
-// stopped / started it, or it has been running fine again for CRASH_RUNNING_FINE_MINUTES).
-function stateOf(serverId: number, run: RunRow, lastMs: number, nowMs: number): { state: CrashState; endedAt: string | null; endedHow: string | null } {
+// How a run of crashes stands now: still crashing, systemd gave up on it (down, needs a person), stopped with the
+// alert's Stop button (until someone starts it), or over (someone stopped / started it, or it has been running fine
+// again for CRASH_RUNNING_FINE_MINUTES).
+function stateOf(
+  serverId: number,
+  run: RunRow,
+  lastMs: number,
+  nowMs: number,
+  stopJobId: number | null,
+): { state: CrashState; endedAt: string | null; endedHow: string | null } {
   const after = sqlite
     .prepare(
-      `SELECT kind, source, actor, job_kind, at FROM service_events
+      `SELECT kind, source, actor, job_id, job_kind, at FROM service_events
        WHERE server_id = ? AND software_id = ? AND at > ? AND id != ? AND kind NOT IN ('enabled', 'disabled', 'masked', 'unmasked', 'reloaded')
        ORDER BY at, id LIMIT 20`,
     )
@@ -74,6 +84,11 @@ function stateOf(serverId: number, run: RunRow, lastMs: number, nowMs: number): 
     return then ? { state: 'over', endedAt: then.at, endedHow: by(then) } : { state: 'gave_up', endedAt: null, endedHow: null };
   }
   if (first && (first.kind === 'crashed' || first.kind === 'crash_loop')) return { state: 'over', endedAt: first.at, endedHow: 'crashed again later (a new run)' };
+  // stopped with the alert's Stop button: it stays down until someone starts it (or the server restarts)
+  if (first && stopJobId !== null && first.kind === 'stopped' && first.source === 'healthcheck' && first.job_id === stopJobId) {
+    const again = next.find((e) => e.kind === 'started' || e.kind === 'restarted');
+    return again ? { state: 'over', endedAt: again.at, endedHow: by(again) } : { state: 'stopped', endedAt: first.at, endedHow: by(first) };
+  }
   if (first) return { state: 'over', endedAt: first.at, endedHow: by(first) };
   // nothing since: running again for a while (it's up now), or still crashing
   const live = sqlite.prepare('SELECT active FROM service_snapshots WHERE server_id = ? AND software_id = ?').get(serverId, run.software_id) as
@@ -95,32 +110,46 @@ export function evaluateCrashes(serverId: number, nowMs = Date.now()): number[] 
        ORDER BY at`,
     )
     .all(serverId, iso(nowMs - env.serviceHistoryDays * 86_400_000)) as unknown as RunRow[];
-  const find = sqlite.prepare('SELECT id, state FROM crash_alerts WHERE server_id = ? AND software_id = ? AND first_crash_at = ?');
+  // who started it before the crashes began (systemd's own restarts aside)
+  const startOf = sqlite.prepare(
+    `SELECT source, actor FROM service_events
+     WHERE server_id = ? AND software_id = ? AND kind IN ('started', 'restarted') AND source != 'systemd' AND at <= ? AND at >= ?
+     ORDER BY at DESC, id DESC LIMIT 1`,
+  );
+  const find = sqlite.prepare('SELECT id, state, stop_job_id FROM crash_alerts WHERE server_id = ? AND software_id = ? AND first_crash_at = ?');
   const insert = sqlite.prepare(
-    `INSERT INTO crash_alerts (server_id, software_id, first_crash_at, last_crash_at, count, ran_for_s, state, detail, ended_at, ended_how, opened_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO crash_alerts (server_id, software_id, first_crash_at, last_crash_at, count, ran_for_s, state, detail, ended_at, ended_how, started_source, started_actor, opened_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const update = sqlite.prepare(
-    'UPDATE crash_alerts SET last_crash_at = ?, count = ?, ran_for_s = ?, state = ?, detail = ?, ended_at = ?, ended_how = ?, updated_at = ? WHERE id = ?',
+    'UPDATE crash_alerts SET last_crash_at = ?, count = ?, ran_for_s = ?, state = ?, detail = ?, ended_at = ?, ended_how = ?, started_source = ?, started_actor = ?, updated_at = ? WHERE id = ?',
   );
   const open: number[] = [];
   for (const run of runs) {
     const count = run.kind === 'crash_loop' ? (run.count ?? 2) : 1;
-    // too few, or right after a start (the server starting up, a start from a terminal or Healthcheck): not this alert
-    if (count < env.crashAlertCount) continue;
-    if (run.ran_for_s !== null && run.ran_for_s < fineS) continue;
+    // right after a start: CRASH_START_ALERT_COUNT, and never when Healthcheck started it (its own start already
+    // retried, stopped it and asked); after running fine: CRASH_ALERT_COUNT
+    const afterStart = run.ran_for_s !== null && run.ran_for_s < fineS;
+    const startedMs = new Date(run.at).getTime() - (run.ran_for_s ?? 0) * 1000;
+    const start = afterStart
+      ? (startOf.get(serverId, run.software_id, run.at, iso(startedMs - 60_000)) as { source: string; actor: string | null } | undefined)
+      : undefined;
+    if (afterStart ? count < env.crashStartAlertCount || start?.source === 'healthcheck' : count < env.crashAlertCount) continue;
     const lastMs = new Date(run.until_at ?? run.at).getTime();
-    const { state, endedAt, endedHow } = stateOf(serverId, run, lastMs, nowMs);
-    const row = find.get(serverId, run.software_id, run.at) as { id: number; state: string } | undefined;
+    const row = find.get(serverId, run.software_id, run.at) as { id: number; state: string; stop_job_id: number | null } | undefined;
+    const { state, endedAt, endedHow } = stateOf(serverId, run, lastMs, nowMs, row?.stop_job_id ?? null);
     let id: number;
     if (row) {
-      update.run(iso(lastMs), count, run.ran_for_s, state, run.detail, endedAt, endedHow, iso(nowMs), row.id);
+      update.run(iso(lastMs), count, run.ran_for_s, state, run.detail, endedAt, endedHow, start?.source ?? null, start?.actor ?? null, iso(nowMs), row.id);
       id = row.id;
     } else {
       if (state === 'over') continue; // over before it was ever seen: the history says it all
-      id = Number(insert.run(serverId, run.software_id, run.at, iso(lastMs), count, run.ran_for_s, state, run.detail, endedAt, endedHow, iso(nowMs), iso(nowMs)).lastInsertRowid);
+      id = Number(
+        insert.run(serverId, run.software_id, run.at, iso(lastMs), count, run.ran_for_s, state, run.detail, endedAt, endedHow, start?.source ?? null, start?.actor ?? null, iso(nowMs), iso(nowMs))
+          .lastInsertRowid,
+      );
     }
-    if (state !== 'over') open.push(id);
+    if (state === 'crashing' || state === 'gave_up') open.push(id);
   }
   sqlite.prepare('DELETE FROM crash_alerts WHERE last_crash_at < ?').run(iso(nowMs - env.serviceHistoryDays * 86_400_000));
   return open;
@@ -232,10 +261,7 @@ export function plainReason(error: string | null, detail: string | null, facts: 
   if (CREDENTIAL_EXPIRED_RE.test(text)) return 'The database password has expired.';
   if (/password authentication failed|Access denied for user|ORA-01017|invalid username\/password|Login failed for user/i.test(text))
     return 'The database refuses its user name or password.';
-  if (PORT_CONFLICT_RE.test(text)) {
-    const port = /\bport\s*:?\s*(\d{2,5})\b/i.exec(text)?.[1];
-    return `Its port${port ? ` ${port}` : ''} is already used by another program.`;
-  }
+  if (PORT_CONFLICT_RE.test(text)) return portsReason(conflictPorts(text));
   if (
     /ORA-12541|ORA-12514|ORA-12170|Communications link failure|Connection refused|UnknownHostException|No route to host|connect timed out|Connection timed out|Could not open JDBC Connection|Unable to acquire JDBC Connection|AMQ219007|Cannot connect to server/i.test(
       text,
@@ -245,9 +271,47 @@ export function plainReason(error: string | null, detail: string | null, facts: 
   if (/ClassNotFoundException|NoClassDefFoundError|UnsupportedClassVersionError|Unable to access jarfile|Invalid or corrupt jarfile|Could not find or load main class/i.test(text))
     return 'Its program files are missing or broken, or it needs a different Java version.';
   if (/Permission denied|AccessDeniedException/i.test(text)) return "It isn't allowed to read or write a file it needs.";
+  const missing = missingFile(text);
+  if (missing) return `A file it needs is missing: ${missing}`;
   if (/FileNotFoundException|NoSuchFileException|No such file or directory/i.test(text)) return 'A file it needs is missing.';
   const ends = detail ? `It ends with ${detail}.` : 'It ends with an error.';
   return error ? `${ends} The error from its log is below.` : `${ends} Its log shows no error lines.`;
+}
+
+// The file a "missing file" error names: Spring Boot's "Config data resource 'file [/x]' ... does not exist", Java's
+// "FileNotFoundException: /x (No such file or directory)", a shell's "/x: No such file or directory".
+function missingFile(text: string): string | null {
+  const m =
+    /Config data resource '(?:file \[)?([^'\]]+)\]?'[^\n]*does not exist/.exec(text) ??
+    /(?:FileNotFoundException|NoSuchFileException):?\s+(\/[^\s:()]+)/.exec(text) ??
+    /(\/[^\s:'"]+): No such file or directory/.exec(text);
+  return m?.[1] ?? null;
+}
+
+// The ports a port-conflict line names ("Port(s) already bound: 9663, 7443", "Port 8085 was already in use").
+export function conflictPorts(text: string): number[] {
+  const line = text.split('\n').find((l) => PORT_CONFLICT_RE.test(l) && extractPorts(l).length > 0);
+  return line ? extractPorts(line) : [];
+}
+
+const and = (items: (string | number)[]) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
+
+export function portsReason(ports: number[]): string {
+  if (ports.length === 0) return 'Its port is already used by another program.';
+  return ports.length === 1 ? `Its port ${ports[0]} is already used by another program.` : `Its ports ${and(ports)} are already used by another program.`;
+}
+
+// ...and by what: "Its ports 9663 and 7443 are already used by another program: 7443 by WSO2 Streaming Integrator
+// (wso2si.service)." `nameOf` turns a unit into its catalog name; `own` is the crashing service's own unit.
+export function portsReasonWithHolders(ports: number[], holders: PortHolder[], own: string, nameOf: (unit: string) => string | null): string {
+  const by = holders.map((h) => {
+    if (!h.pid) return `${h.port} by a program Healthcheck's account can't see`;
+    if (h.unit === own) return `${h.port} by an older copy of itself that is still running`;
+    if (h.unit && !h.startedByHand) return `${h.port} by ${nameOf(h.unit) ? `${nameOf(h.unit)} (${h.unit})` : h.unit}`;
+    return `${h.port} by ${h.process ?? 'a program'} (pid ${h.pid}${h.user ? `, user ${h.user}` : ''}), started by hand`;
+  });
+  const base = portsReason(ports);
+  return by.length ? `${base.slice(0, -1)}: ${and(by)}.` : base;
 }
 
 // Read the open alerts' service logs, disk and memory, and write down why.
@@ -268,11 +332,25 @@ export async function checkCrashes(server: ServerRow, client: Client, nowMs = Da
     const error = lastErrorBlock(s.LOG ?? '') ?? lastErrorBlock(s.OUT ?? '');
     const facts = parseFacts(res.stdout);
     let reason = plainReason(error, a.detail, facts);
+    let said = error ?? '';
     // nothing known in the error block: the rest of the log's last lines may still say it (an earlier line of the
     // same crash, cut off from the block)
     if (reason.startsWith('It ends with')) {
-      const wider = plainReason(`${s.LOG ?? ''}\n${s.OUT ?? ''}`, a.detail, facts);
-      if (!wider.startsWith('It ends with')) reason = wider;
+      const all = `${s.LOG ?? ''}\n${s.OUT ?? ''}`;
+      const wider = plainReason(all, a.detail, facts);
+      if (!wider.startsWith('It ends with')) {
+        reason = wider;
+        said = all;
+      }
+    }
+    // its port is taken: say by what (the same lookup a start in Healthcheck does)
+    const ports = conflictPorts(said);
+    if (ports.length > 0 && reason === portsReason(ports)) {
+      const holders = await findPortHolders(client, ports).catch(() => [] as PortHolder[]);
+      const others = sqlite
+        .prepare('SELECT d.* FROM software_definitions d JOIN group_software g ON g.software_id = d.id WHERE g.group_id = ?')
+        .all(server.group_id) as unknown as SoftwareDefinition[];
+      reason = portsReasonWithHolders(ports, holders, unit, (u) => others.find((d) => unitNames(d).includes(u))?.name ?? null);
     }
     sqlite.prepare('UPDATE crash_alerts SET reason = ?, excerpt = ?, facts = ?, looked_at = ? WHERE id = ?').run(reason, error, JSON.stringify(facts), iso(nowMs), id);
   }

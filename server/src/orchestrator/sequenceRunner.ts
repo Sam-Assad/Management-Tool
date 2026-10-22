@@ -3,7 +3,7 @@ import { sqlite, insertRow } from '../db/client.js';
 import { getConnection } from '../ssh/connectionManager.js';
 import { runCommand } from '../ssh/exec.js';
 import { streamTail } from '../ssh/tail.js';
-import { detectPresence, checkComponent, probeComponentUnit, systemctlCommand } from '../scan/detectors.js';
+import { detectPresence, checkComponent, probeComponentUnit, systemctlCommand, type ComponentCheck } from '../scan/detectors.js';
 import { sseHub } from '../sse/sseHub.js';
 import { env } from '../env.js';
 import {
@@ -26,7 +26,9 @@ import {
   checkWildFlyTraffic,
   notReadyDetail,
 } from '../scan/wildfly.js';
-import { isArtemis, checkArtemis, artemisSummary, saveArtemisCheck, type ArtemisReport } from '../scan/artemis.js';
+import { isArtemis, checkArtemis, artemisSummary, saveArtemisCheck, clearDlq, latestArtemisCheck, type ArtemisReport } from '../scan/artemis.js';
+import { checkArtemisOn } from '../heartbeat/artemisBeat.js';
+import { accountCause, accountProblemsSeenLater, checkServiceHealth } from '../scan/serviceHealth.js';
 import { readHistoryForGroup } from '../scan/history.js';
 import type { SoftwareDefinition, Server as ServerRow } from '@healthcheck/shared';
 
@@ -263,10 +265,40 @@ async function recordActualState(client: any, serverId: number, def: SoftwareDef
     return;
   }
   try {
-    const { up, detail } = await checkComponent(client, def);
+    const { up, detail } = await checkComponent(client, def, { serverId });
     recordStatus(serverId, def.id, 'scan', up ? 'up' : 'down', detail);
   } catch {
     recordStatus(serverId, def.id, 'scan', 'down', 'failed');
+  }
+}
+
+// After "It's fixed" on a database account: look at these services again now, so their rows don't wait for the next
+// check. Read-only, like Check status. Skipped: a server that can't be reached, and one with a run going (the run
+// records its own states); their next check catches up.
+export async function recheckServices(pairs: { server_id: number; software_id: number }[]) {
+  const byServer = new Map<number, number[]>();
+  for (const p of pairs) byServer.set(p.server_id, [...(byServer.get(p.server_id) ?? []), p.software_id]);
+  for (const [serverId, softwareIds] of byServer) {
+    const server = sqlite.prepare('SELECT * FROM servers WHERE id = ?').get(serverId) as unknown as ServerRow | undefined;
+    if (!server || isGroupBusy(server.group_id)) continue;
+    const defs = sqlite
+      .prepare('SELECT sd.* FROM group_software gs JOIN software_definitions sd ON sd.id = gs.software_id WHERE gs.group_id = ?')
+      .all(server.group_id) as unknown as SoftwareDefinition[];
+    const artemisHere = defs.some((d) => isArtemis(d));
+    let client;
+    try {
+      client = await getConnection(server as any);
+    } catch {
+      continue;
+    }
+    for (const def of defs.filter((d) => softwareIds.includes(d.id))) {
+      try {
+        const { up, detail } = await checkComponent(client, def, { artemisHere, serverId });
+        recordStatus(serverId, def.id, 'scan', up ? 'up' : 'down', detail);
+      } catch {
+        // dropped mid-way: the next check
+      }
+    }
   }
 }
 
@@ -778,11 +810,20 @@ async function startAttempts(
       recordStatus(server.id, def.id, 'scan', 'down', notReadyDetail(traffic.problems));
       return { ok: false, note: '' };
     }
+    // Before stopping it, its log: a locked or expired database account names itself there (WildFly's test only says
+    // "not valid"), and is kept for the other services that sign in with it (scan/dbAccounts.ts).
+    let fromLog = '';
+    try {
+      const unit = (await probeComponentUnit(client, def)).unit;
+      fromLog = accountCause((await checkServiceHealth(client, def, unit, false, { serverId: server.id, accounts: ds.accounts })).accountErrors);
+    } catch {
+      // the log couldn't be read: the test's own answer below
+    }
     await stopQuietly(client, def);
     const names = ds.failures.map((f) => f.name);
     const failureText = ds.failures.map((f) => `${f.name}: ${f.reason}`).join('\n');
-    const cause = friendlyDsReason(failureText);
-    if (CREDENTIAL_EXPIRED_RE.test(failureText)) credentialFailures.add(conflictKey);
+    const cause = fromLog || friendlyDsReason(failureText);
+    if (CREDENTIAL_EXPIRED_RE.test(failureText) || /ORA-28001/.test(fromLog)) credentialFailures.add(conflictKey);
     datasourceFailures.set(conflictKey, { names, reason: cause });
     updateStep(jobId, step.id, {
       status: 'failed',
@@ -1393,10 +1434,10 @@ function loadPair(serverId: number, softwareId: number) {
 
 // Checks (busy, conditions) and creates the job for a single-component action. The busy check runs
 // again after the conditions were read from the server, because that takes a moment.
-async function beginSingle(serverId: number, softwareId: number, kind: string, mode: 'start' | 'restart' | 'stop') {
+async function beginSingle(serverId: number, softwareId: number, kind: string, mode: 'start' | 'restart' | 'stop', conditions = true) {
   const { server, def } = loadPair(serverId, softwareId);
   assertNotBusy(server.group_id);
-  await guardSingle(server, def, mode);
+  if (conditions) await guardSingle(server, def, mode);
   assertNotBusy(server.group_id);
   return { server, def, job: createJob(kind, server.group_id) };
 }
@@ -1523,11 +1564,72 @@ export async function runRestartOne(serverId: number, softwareId: number) {
   return job;
 }
 
-export async function runStopOne(serverId: number, softwareId: number) {
-  const { server, def, job } = await beginSingle(serverId, softwareId, 'stop_one', 'stop');
+// keepsCrashing: the crash alert's Stop. The stop order isn't checked: a service that keeps crashing serves nothing
+// that sits on top of it, so stopping it takes nothing down that still worked.
+export async function runStopOne(serverId: number, softwareId: number, { keepsCrashing = false } = {}) {
+  const { server, def, job } = await beginSingle(serverId, softwareId, 'stop_one', 'stop', !keepsCrashing);
   void (async () => {
     const ok = await stopStep(job.id, server, def);
     finishJob(job.id, ok ? 'succeeded' : 'failed', ok ? undefined : `${def.name} failed to stop`);
+  })();
+  return job;
+}
+
+// Clear DLQ (admins, from the Artemis box): delete every message in the server's Artemis DLQ, then read the queues
+// again so the box shows what's there now. A run like any other: one at a time per server, in Recent activity.
+export async function runClearDlq(serverId: number) {
+  const server = sqlite.prepare('SELECT * FROM servers WHERE id = ?').get(serverId) as ServerRow | undefined;
+  if (!server) throw new Error('Server not found');
+  const def = loadOrderedSoftware(server.group_id, 'asc').find((d) => isArtemis(d));
+  if (!def) throw new RefusedError("This server doesn't have Artemis.");
+  assertNotBusy(server.group_id);
+  let unit: string | undefined;
+  try {
+    const client = await getConnection(server as any);
+    if (def.detect_method === 'systemd') {
+      const state = await probeComponentUnit(client, def);
+      if (!state.installed || state.active !== 'active') throw new RefusedError("Artemis isn't running, so there is nothing to clear. Start it first.");
+      unit = state.unit;
+    }
+  } catch (err) {
+    if (err instanceof RefusedError) throw err;
+    // can't tell (for example the server is unreachable) - the run itself will report that
+  }
+  assertNotBusy(server.group_id);
+  const job = createJob('clear_dlq', server.group_id);
+  void (async () => {
+    const step = createStep(job.id, server.id, def.id, 'clear_dlq');
+    const before = latestArtemisCheck(server.id, def.id)?.report.dlq ?? null;
+    const n = (v: number) => v.toLocaleString('en-US');
+    updateStep(job.id, step.id, {
+      status: 'running',
+      started_at: nowIso(),
+      log_excerpt: `Deleting the ${before ? `${n(before)} ` : ''}messages in the DLQ. This can take a few minutes.`,
+    });
+    try {
+      const client = await getConnection(server as any);
+      const outcome = await clearDlq(client, unit);
+      // read the queues again either way: the box shows what's there now
+      const after = (await checkArtemisOn(server, def, 'manual')).report;
+      let message: string | null = null;
+      if (!outcome.ok) message = outcome.problem;
+      else if (after.dlq !== null && before !== null && before > 0 && after.dlq >= before) message = `The broker answered, but the DLQ still holds ${n(after.dlq)} messages.`;
+      const done =
+        after.dlq === null
+          ? `The DLQ was cleared. Its new count couldn't be read: ${after.notes.join(' ') || 'no answer'}`
+          : after.dlq === 0
+            ? `Deleted ${before ? `${n(before)} messages` : 'the messages'} from the DLQ. It's empty now.`
+            : `Cleared the DLQ. It holds ${n(after.dlq)} again: messages that couldn't be delivered arrived meanwhile.`;
+      updateStep(job.id, step.id, {
+        status: message ? 'failed' : 'healthy',
+        log_excerpt: message ? `${message}${outcome.technical ? `\n\n${outcome.technical}` : ''}` : done,
+        finished_at: nowIso(),
+      });
+      finishJob(job.id, message ? 'failed' : 'succeeded', message ?? undefined);
+    } catch (err: any) {
+      updateStep(job.id, step.id, { status: 'failed', log_excerpt: String(err?.message ?? err), finished_at: nowIso() });
+      finishJob(job.id, 'failed', String(err?.message ?? err));
+    }
   })();
   return job;
 }
@@ -1545,18 +1647,25 @@ export async function runScan(groupId: number) {
         )
         .all(groupId) as unknown as SoftwareDefinition[];
       const groupServers = loadGroupServers(groupId);
+      // this server runs Artemis itself: a service that can't reach it is told why
+      const artemisHere = links.some((d) => isArtemis(d));
+      const checked: { serverId: number; def: SoftwareDefinition; stepId: number; result: ComponentCheck }[] = [];
       for (const def of links) {
         for (const server of groupServers) {
           const step = createStep(job.id, server.id, def.id, 'health_check');
           updateStep(job.id, step.id, { status: 'running', started_at: nowIso() });
           try {
             const client = await getConnection(server as any);
-            const { up: present, state, detail, datasources, notReady } = await checkComponent(client, def);
+            const result = await checkComponent(client, def, { artemisHere, serverId: server.id });
+            const { up: present, state, detail, datasources, notReady, unhealthy } = result;
+            checked.push({ serverId: server.id, def, stepId: step.id, result });
             recordStatus(server.id, def.id, 'scan', present ? 'up' : 'down', detail);
             const failureText = (datasources ?? []).map((f) => `${f.name}: ${f.reason}`).join('\n');
             updateStep(job.id, step.id, {
               status: present ? 'healthy' : 'failed',
-              log_excerpt: notReady?.length
+              log_excerpt: unhealthy?.length
+                ? `running, but not working: ${unhealthy.join(' ')}`
+                : notReady?.length
                 ? `running, but can't receive traffic: ${notReady.join(' ')}${failureText ? `\n\n${failureText}` : ''}`
                 : datasources?.length
                   ? `running, but ${datasources.length} datasource${datasources.length > 1 ? 's' : ''} can't connect - ${friendlyDsReason(failureText)}: ` +
@@ -1572,6 +1681,14 @@ export async function runScan(groupId: number) {
             });
           }
         }
+      }
+      // a service looked at before another one's log showed their database account locked hears about it now
+      for (const c of checked) {
+        if (c.result.state !== 'running' || !c.result.accounts?.length) continue;
+        const problems = accountProblemsSeenLater(c.serverId, c.def.id, c.result.accounts, c.result.dbConnections ?? null);
+        if (problems.length === 0) continue;
+        recordStatus(c.serverId, c.def.id, 'scan', 'down', `unhealthy:${problems.join(' ')}`);
+        updateStep(job.id, c.stepId, { status: 'failed', log_excerpt: `running, but not working: ${problems.join(' ')}` });
       }
       finishJob(job.id, 'succeeded');
     } catch (err: any) {

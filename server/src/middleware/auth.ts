@@ -96,8 +96,12 @@ const RULES: { method: string; path: RegExp; permission: Permission | ((req: Req
   { method: 'POST', path: /^\/servers\/\d+\/software\/\d+\/start$/, permission: 'start_one' },
   { method: 'POST', path: /^\/servers\/\d+\/software\/\d+\/restart$/, permission: 'restart_one' },
   { method: 'POST', path: /^\/servers\/\d+\/software\/\d+\/stop$/, permission: 'stop_one' },
+  { method: 'POST', path: /^\/servers\/\d+\/software\/\d+\/stop-crashing$/, permission: 'stop_one' },
+  { method: 'POST', path: /^\/servers\/\d+\/software\/\d+\/db-account-fixed$/, permission: 'check_status' },
   { method: 'POST', path: /^\/groups\/\d+\/scan$/, permission: 'check_status' },
   { method: 'POST', path: /^\/servers\/\d+\/artemis-check$/, permission: 'run_checks' },
+  // deletes messages for good: admins only
+  { method: 'POST', path: /^\/servers\/\d+\/artemis\/clear-dlq$/, permission: 'manage_users' },
   { method: 'POST', path: /^\/servers\/\d+\/test-connection$/, permission: 'run_checks' },
   // the check before Start / Restart / Stop All on several servers: whoever may run that one
   {
@@ -133,6 +137,7 @@ const JOB_PERMISSION: Record<string, Permission> = {
   restart_one: 'restart_one',
   stop_one: 'stop_one',
   scan: 'check_status',
+  clear_dlq: 'manage_users',
 };
 
 function jobPermission(jobId: number): Permission | null {

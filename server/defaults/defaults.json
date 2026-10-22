@@ -13,7 +13,9 @@
       "log_path": "/Data/logs/keycloak/keycloak.log",
       "success_pattern": "Listening on:",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 300
+      "health_timeout_s": 300,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "WSO2 API Manager",
@@ -28,7 +30,9 @@
       "log_path": "/Data/logs/api-manager/wso2carbon.log",
       "success_pattern": "WSO2 Carbon started in",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 300
+      "health_timeout_s": 300,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "WSO2 Streaming Integrator",
@@ -43,7 +47,9 @@
       "log_path": "/Data/logs/streaming-integrator/carbon.log",
       "success_pattern": null,
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 300
+      "health_timeout_s": 300,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "Artemis",
@@ -58,7 +64,9 @@
       "log_path": "/Data/logs/message-broker/log/artemis.log",
       "success_pattern": "Server is now live|Message Broker is now live",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "WildFly (JBoss)",
@@ -73,7 +81,9 @@
       "log_path": "/Data/logs/application-server/server.log",
       "success_pattern": "WFLYSRV0025|WFLYSRV0026",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 300
+      "health_timeout_s": 300,
+      "needs_database": 1,
+      "needs_artemis": 1
     },
     {
       "name": "Nginx",
@@ -88,7 +98,9 @@
       "log_path": null,
       "success_pattern": null,
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 60
+      "health_timeout_s": 60,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "Filebeat",
@@ -103,7 +115,9 @@
       "log_path": null,
       "success_pattern": null,
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 60
+      "health_timeout_s": 60,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "mq-wrapper",
@@ -118,7 +132,9 @@
       "log_path": "/Data/logs/mq-wrapper/mq-wrapper.log",
       "success_pattern": "configureConnectionManager, s=success",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "voucher-backend",
@@ -133,7 +149,9 @@
       "log_path": "/Data/logs/admin/backend/voucher/spring.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "loyalty-backend",
@@ -148,7 +166,9 @@
       "log_path": "/Data/logs/admin/backend/loyalty/spring.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "portal-backend",
@@ -163,7 +183,9 @@
       "log_path": "/Data/logs/admin/backend/portal/spring.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "conversion-rules-selector",
@@ -178,7 +200,9 @@
       "log_path": "/Data/logs/conversion-rules-selector/rules-selector.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "earning-rules-selector",
@@ -193,7 +217,9 @@
       "log_path": "/Data/logs/earning-rules-selector/rules-selector.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "rules-interpreter",
@@ -208,7 +234,9 @@
       "log_path": "/Data/logs/rules-interpreter/rulesInterpreter.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "voucher-management",
@@ -223,7 +251,9 @@
       "log_path": "/Data/logs/voucher-management/voucher-trx.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "product-catalog",
@@ -238,7 +268,9 @@
       "log_path": "/Data/logs/admin/backend/product-catalog/spring.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "balance-management",
@@ -253,7 +285,9 @@
       "log_path": "/Data/logs/balance-management/balance-trx.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 1,
+      "needs_artemis": 0
     },
     {
       "name": "balance-notification",
@@ -268,7 +302,9 @@
       "log_path": "/Data/logs/balance-notification/balance-notification.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 1,
+      "needs_artemis": 1
     },
     {
       "name": "conversion-backend",
@@ -283,7 +319,9 @@
       "log_path": "/Data/logs/admin/backend/conversion/spring.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 1,
+      "needs_artemis": 0
     },
     {
       "name": "goal-backend",
@@ -298,7 +336,9 @@
       "log_path": "/Data/logs/admin/backend/goal/spring.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 1,
+      "needs_artemis": 0
     },
     {
       "name": "prize-draw-backend",
@@ -313,7 +353,9 @@
       "log_path": "/Data/logs/admin/backend/prize-draw/spring.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 1,
+      "needs_artemis": 0
     },
     {
       "name": "sales-backend",
@@ -328,7 +370,9 @@
       "log_path": "/Data/logs/admin/backend/sales/spring.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "usage-backend",
@@ -343,7 +387,9 @@
       "log_path": "/Data/logs/admin/backend/usage/spring.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 0,
+      "needs_artemis": 0
     },
     {
       "name": "product-catalog-service",
@@ -358,7 +404,9 @@
       "log_path": "/Data/logs/product-catalog/spring.log",
       "success_pattern": "",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 180
+      "health_timeout_s": 180,
+      "needs_database": 1,
+      "needs_artemis": 0
     },
     {
       "name": "streak-backend",
@@ -373,7 +421,9 @@
       "log_path": "/Data/logs/admin/backend/streak/streak-service.log",
       "success_pattern": "Started .+ in [0-9.]+ seconds",
       "error_pattern": "\\b(ERROR|FATAL|SEVERE)\\b|APPLICATION FAILED TO START",
-      "health_timeout_s": 120
+      "health_timeout_s": 120,
+      "needs_database": 0,
+      "needs_artemis": 0
     }
   ],
   "conditions": [

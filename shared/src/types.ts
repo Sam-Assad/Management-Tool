@@ -43,6 +43,9 @@ export interface SoftwareDefinition {
   success_pattern: string | null;
   error_pattern: string | null;
   health_timeout_s: number;
+  // 1 = it must keep an open connection to the database / Artemis while it runs (checked by Check status)
+  needs_database: number;
+  needs_artemis: number;
   default_rank: number | null;
   created_at: string;
 }

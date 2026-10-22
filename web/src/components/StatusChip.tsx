@@ -8,6 +8,7 @@ const STATE_INFO: Record<string, { label: string; tone: 'ok' | 'bad' | 'warn' | 
   credential_expired: { label: 'Failed (due to expired password)', tone: 'bad' },
   datasource_down: { label: 'Failed (database connection)', tone: 'bad' },
   not_ready: { label: "Failed (can't receive traffic)", tone: 'bad' },
+  unhealthy: { label: 'Running, but not working', tone: 'bad' },
   unreachable: { label: 'Unreachable', tone: 'bad' },
   starting: { label: 'Starting', tone: 'warn' },
   stopping: { label: 'Stopping', tone: 'warn' },

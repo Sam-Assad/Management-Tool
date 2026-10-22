@@ -78,6 +78,13 @@ export const SETTINGS: { title: string; settings: Setting[] }[] = [
         about: "When Artemis's DLQ, ExpiryQueue and memory are read: 08:00, 14:00 and 20:00 on this machine's clock.",
         recommended: true,
       },
+      {
+        key: 'DATABASE_PORT',
+        value: '1521',
+        about:
+          'The database port (Oracle: 1521). A running service marked "Needs the database" in the Software Catalog is flagged when it has no open connection to this port.',
+        recommended: true,
+      },
     ],
   },
   {
@@ -94,14 +101,21 @@ export const SETTINGS: { title: string; settings: Setting[] }[] = [
         key: 'CRASH_ALERT_COUNT',
         value: '3',
         about:
-          'A service that had been running fine raises an alert once it has crashed this many times in a row (systemd restarting it each time). Healthcheck never stops it: the alert says how many times and why.',
+          'A service that had been running fine raises an alert once it has crashed this many times in a row (systemd restarting it each time). Healthcheck never stops it by itself: the alert says how many times and why, and has a Stop button.',
+        recommended: true,
+      },
+      {
+        key: 'CRASH_START_ALERT_COUNT',
+        value: '5',
+        about:
+          'A service that crashes right after it was started (the server starting up, a start from a terminal or by systemd) raises an alert once it has crashed this many times in a row. Never for a start in Healthcheck: those try 3 times, then stop it and ask you.',
         recommended: true,
       },
       {
         key: 'CRASH_RUNNING_FINE_MINUTES',
         value: '20',
         about:
-          'A service counts as running fine once it has been up this many minutes. Crashes sooner after a start (the server starting up, a start from a terminal or from Healthcheck) never raise an alert.',
+          'A service counts as running fine once it has been up this many minutes. Crashes sooner after a start count toward CRASH_START_ALERT_COUNT instead.',
         recommended: true,
       },
       {
@@ -292,10 +306,14 @@ export const env = {
   heartbeatCron: str('HEARTBEAT_INTERVAL_CRON'),
   // service history (starts, stops, crashes) is kept this many days
   serviceHistoryDays: num('SERVICE_HISTORY_DAYS', 1),
-  // crash alerts (scan/crashAlerts.ts): how often to look, how many crashes in a row, after how long running
-  // a service counts as fine, and how close together crashes must be to count as one run
+  // a running service that "Needs the database" must hold a connection to this port (scan/serviceHealth.ts)
+  databasePort: num('DATABASE_PORT', 1),
+  // crash alerts (scan/crashAlerts.ts): how often to look, how many crashes in a row (after running fine / right
+  // after a start), after how long running a service counts as fine, and how close together crashes must be to
+  // count as one run
   crashCheckCron: str('CRASH_CHECK_CRON'),
   crashAlertCount: num('CRASH_ALERT_COUNT', 1),
+  crashStartAlertCount: num('CRASH_START_ALERT_COUNT', 1),
   crashRunningFineMinutes: num('CRASH_RUNNING_FINE_MINUTES', 0),
   crashLoopMinutes: num('CRASH_LOOP_MINUTES', 1),
   // Start All / Restart All: how many times to try a component that keeps crashing before asking you

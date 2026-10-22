@@ -113,7 +113,8 @@ The settings, as the file lists them:
 | `SERVICE_HISTORY_DAYS` | `30` | How many days of service history (starts, stops, errors) to keep. |
 | `CRASH_CHECK_CRON` | `0 * * * *` | How often to look for services that keep crashing (every hour). See *Crash alerts*. |
 | `CRASH_ALERT_COUNT` | `3` | Crashes in a row, of a service that had been running fine, before the alert. |
-| `CRASH_RUNNING_FINE_MINUTES` | `20` | A service counts as running fine once it has been up this long; crashes sooner after a start never raise an alert. |
+| `CRASH_START_ALERT_COUNT` | `5` | Crashes in a row right after a start (the server starting up, a terminal; never a start in Healthcheck) before the alert. |
+| `CRASH_RUNNING_FINE_MINUTES` | `20` | A service counts as running fine once it has been up this long; crashes sooner after a start count toward `CRASH_START_ALERT_COUNT`. |
 | `CRASH_LOOP_MINUTES` | `60` | Crashes less than this long after systemd restarted the service count as one run (one alert, one "Kept crashing" history entry). |
 | `START_ATTEMPTS` | `3` | Start / Restart All: how many times to try a component that crashes on start before pausing to ask you. |
 | `START_RETRY_DELAY_S` | `5` | Seconds to wait between those attempts. |
@@ -127,6 +128,7 @@ The settings, as the file lists them:
 | `ARTEMIS_PASSWORD` | *(none)* | That login's password. **Put it in `.env`** (gitignored), so it never ends up in the repository. Without it the queues can't be read on a broker that checks passwords, and the report says so. |
 | `ARTEMIS_URL` | `tcp://localhost:61616` | Where the broker's CLI connects, run on the server itself. |
 | `ARTEMIS_INSTANCE` | `/Data/software/bin/loyalty-management-broker` | Only a fallback: the instance folder is normally read from the running broker's `-Dartemis.instance=`. |
+| `DATABASE_PORT` | `1521` | The database port. A running service marked **Needs the database** in the Software Catalog is flagged when it has no open connection to it (see *Can it do its job?*). |
 | `ARTEMIS_CHECK_CRON` | `0 8,14,20 * * *` | When Artemis's own beat reads DLQ, ExpiryQueue and memory: every day at 08:00, 14:00 and 20:00, on the clock of the machine running Healthcheck. |
 | `ARTEMIS_MEMORY_DANGER_PERCENT` | `50` | At or above this share of its heap in use (e.g. 2 GB of 4 GB), the Artemis report becomes a red danger warning. |
 | `HEALTHCHECK_DATA_DIR` | `server/data` | Where the SQLite database, the generated SSH keypair, and `master.key` live. Change this if you want the data directory somewhere other than inside the repo. A relative path counts from the Healthcheck folder. |
@@ -171,7 +173,7 @@ action needs its own permission:
 | | **Read logs** | Open a service's log (logs can contain sensitive data) |
 | Configure | **Manage servers** | Add a server, stop watching it, change its list of services (Find installed software, Watch it, Remove from this list) |
 | | **Edit the software catalog** / **Edit conditions** | Change those pages (without it they're view-only) |
-| Administer | **Manage users** | The Users page. Having it makes someone an **admin**. |
+| Administer | **Manage users** | The Users page. Having it makes someone an **admin**. Admins can also **Clear DLQ** in the Artemis box. |
 
 Three presets fill the boxes in one click, and any box can be changed afterwards ("Custom"):
 - **Viewer:** nothing, so view only. For managers.
@@ -399,7 +401,7 @@ by `|` (e.g. `wso2am.service|wso2apim.service`); on each server Healthcheck uses
 exists there, for detection, start and stop alike. The **Start/Stop
 command are left blank** — Healthcheck runs `systemctl start|stop <unit>` itself
 (via `sudo -n` when it isn't root). You generally don't need to add anything
-before you start; **Edit** an entry from the Software Catalog page (not
+before you start (each entry also has **Needs the database** / **Needs Artemis**, see *Can it do its job?*); **Edit** an entry from the Software Catalog page (not
 delete/recreate — that would remove it from every server) whenever a new one is
 needed or an existing path/pattern needs to change:
 
@@ -617,6 +619,24 @@ The beat only reads, and never starts or stops anything. If Healthcheck itself w
 it catches up once on start, but only when the last scheduled reading is over 8 hours old, so restarting the
 app doesn't re-read every broker. Readings are kept for 30 days.
 
+#### Clear DLQ
+
+**Clear DLQ**, under the DLQ count in the Artemis box, removes **every message in the DLQ** on that server: the
+same as **Operations → removeAllMessages() → Execute** on the DLQ in the Artemis console (the `artemis queue purge`
+command calls exactly that operation). **The DLQ itself stays**, empty, and keeps receiving new messages. No
+broker setting or file is changed. The removed messages can't be recovered.
+- **Admins only** (the **Manage users** permission). Others see it greyed out.
+- **Asks first**, with the count from the last reading and the server's name.
+- **Runs as a run** (one at a time per server, like Start All), shown on the page and in **Recent activity** as
+  "Clear DLQ · by <name>". It runs `artemis queue purge --name DLQ` on the server, with the same login as the
+  readings (`ARTEMIS_USER` / `ARTEMIS_PASSWORD`), for up to 10 minutes: hundreds of thousands of messages can take
+  a few minutes. Then the queues are read again, and the box shows the new count.
+- **Only the DLQ.** Artemis keeps running; ExpiryQueue and every other queue are left alone.
+- **When it can't:** Artemis isn't running (refused before anything is done), the broker refuses the login, or the
+  account may not remove messages. The run says which, in plain words. Healthcheck never changes the broker; the
+  console uses your console login, while this uses `ARTEMIS_USER`, which then needs the `manage` permission (given
+  by whoever runs the broker).
+
 #### Artemis report after a start
 
 Each time Healthcheck **starts or restarts Artemis**, whether on its own or as part of Start All or
@@ -786,11 +806,12 @@ listed under; the dashboard's chips use the shorter status names:
 
 | Server page | Status (dashboard) | Meaning |
 |---|---|---|
-| **Working normally** | **Running** | systemd reports the unit `active` (and, for WildFly, every datasource connects) |
+| **Working normally** | **Running** | systemd reports the unit `active`, and it passes the checks below (*Can it do its job?*). A recent connection error in its log, with nothing else wrong, is a grey note on its row |
 | **Can't reach the database** | **Failed (database connection)** | WildFly is running, but one or more of its datasources fail `test-connection-in-pool` |
 | **Can't receive traffic** | **Failed (can't receive traffic)** | WildFly is running and its datasources connect, but it says it isn't ready, or its web listener doesn't answer |
+| **Running, but not working** | **Running, but not working** | it's running, but has no connection to the database or Artemis it needs, or (a jar) its port doesn't answer requests. See *Can it do its job?* |
 | **Database password expired** | **Failed (due to expired password)** | it stopped because its database password expired |
-| **Stopped with an error** | **Failed** | systemd reports `failed`, or the last start didn't become healthy |
+| **Stopped with an error** | **Failed** | systemd reports `failed`, or the last start didn't become healthy. Not a normal stop of a Java service: it exits with code 143 (130 for Ctrl+C), which systemd calls `failed` unless its unit has `SuccessExitStatus=143`; that shows as **Stopped** |
 | **Stopped** | **Stopped** | installed, not running |
 | **In progress** | **Starting** / **Stopping** | systemd is in the middle of it |
 | **Not installed here** | **Not installed** | the unit doesn't exist on that server (Start/Restart/Stop All simply skip it) |
@@ -808,9 +829,74 @@ datasource and traffic checks (see *WildFly's database connections and traffic*)
 flagged, never acted on. A component parked as *Failed (due to expired password)*, *Failed (can't receive traffic)* or *Failed (database
 connection)* keeps that status while it stays down, instead of turning into a bare "Stopped" at the next beat.
 
+#### Can it do its job?
+
+"Running" to systemd isn't enough: a service can run while it can't reach Artemis or the database, or while it
+doesn't answer requests (a jar can print its "Started" line and, a second later, fail to connect to the broker). So
+**Check status** and every background check also look, for each running service, read-only and in one SSH command
+per service:
+
+- **Does it answer requests?** (jars) Healthcheck reads the ports the service's own process listens on (nothing to
+  configure) and sends one web request to each, over HTTPS and plain HTTP. Any answer, even *Unauthorized* or
+  *Not found*, proves it accepts requests. When none of its ports answers within 5 seconds, or they refuse: *It doesn't
+  answer requests*. The big services (Keycloak, WSO2, Artemis) also listen on internal ports that never answer a web
+  request, so they aren't probed; WildFly has its own traffic check (above).
+- **Is it connected to what it needs?** In the **Software Catalog**, each entry has **Needs the database** and **Needs
+  Artemis**. A running service with that box ticked must have an open connection to the database port
+  (`DATABASE_PORT`, 1521). With none: *It has no connection to the database*. For Artemis (port from `ARTEMIS_URL`,
+  61616) no connection on its own is fine, because a service that only sends now and then (balance-notification)
+  connects when it has a message. It's a problem when Artemis runs on that server and nothing listens on its port
+  (*Artemis on this server isn't running*), or when the service's log reported a broker error in the last hour (*It
+  has no connection to Artemis*). Tick the database only for a service that keeps a connection all the time: some
+  (voucher-backend, mq-wrapper, loyalty-backend) hold none while idle. The shipped catalog ticks what the loyalty
+  servers show: WildFly and balance-notification need both; balance-management, conversion-backend, goal-backend,
+  prize-draw-backend and product-catalog-service the database.
+- **Its database accounts.** When a database account is locked or its password expires, Oracle keeps the sessions
+  the services already have and only refuses new sign-ins. So their connections, and WildFly's datasource test
+  (which borrows a connection already open), still look fine, until the service needs a new one: a restart, a busy
+  moment, a pool replacing its idle connections (WildFly after 15 minutes). Healthcheck finds out from the logs, and
+  never signs in to the database itself:
+  - Which accounts a service signs in with: WildFly's datasources (user name, JNDI name and database, read with
+    jboss-cli), a jar's settings file (the `application.properties` / `.yml` in its start command, else in its working
+    folder, else inside the jar; the `${DOMAIN}`-style placeholders in it are looked up in its environment). Only the
+    url and user name lines are read; password lines never leave the server.
+  - In its log since it last started: `ORA-28000` (locked), `ORA-28001` (password expired), `ORA-01017` (wrong password).
+    WildFly names the pool (*IJ000610: Unable to fill pool: java:/LOYALTY_CONF*), so the account is known; for a jar
+    with one account it can only be that one. Shown as *Running, but not working*: *The database account LOYALTY_CONF
+    is locked, so it can't open new connections to the database. It still works on the connections it already has; a
+    restart or a busy moment will break it. Its log at 13:46: ORA-28000 … Don't restart it before the account is
+    unlocked.*
+  - A locked or expired account is then shown on **every** service that signs in with the same account (same user
+    name on the same database), on any server, even when its own log is quiet: *… Seen in the log of WildFly (JBoss) at
+    13:46 (ORA-28000).* A service that opens its connections only when a request needs one (loyalty-backend) shows
+    nothing itself until a request fails. A wrong password is only shown on the service whose log has it: it's about
+    that service's settings.
+  - **It's fixed.** A log shows when an account broke, never when it works again: on loyalty_1 WildFly logged
+    LOYALTY_CONF's lock once, then kept using the one connection it had left and logged nothing more. So the error
+    stays until someone clicks **It's fixed** on the row (anyone with the **Check status** permission), once the DBA
+    has unlocked the account or the password is renewed or corrected. That leaves out the errors logged until then,
+    for that account on every service that signs in with it (any server) and for that service's own log, and looks at
+    those services again right away. A new error in a log after that counts again, so if it's still locked it comes
+    back. It also clears when the service that logged it starts again (only its log since that start is read), or
+    when the error is a day old. While it's shown, Restart isn't outlined: restarting a service whose account is
+    locked would make it stop working completely.
+  - Healthcheck can't see an expiry date coming: that needs a sign-in to the database.
+- **Why, from its log:** the broker and database errors in its log since its last start, at most 24 hours back
+  (`AMQ219007`, `AMQ212037`, `ORA-…`, *Connection is not available* …), with their time, are added to the reason: *It has no connection to
+  Artemis (port 61616). Its log at 12:13: AMQ219007: Cannot connect to server(s).* A log error alone doesn't decide (the
+  service may have reconnected since): when everything else is fine and the error is less than an hour old, it's a
+  grey note on the row: *Its log reported a broker connection error at 12:13 …*.
+
+Such a service is listed under **Needs attention → Running, but not working**, with Restart outlined (for a database
+account, **It's fixed** instead), and a background
+check raises the red warning popup for it (below). Nothing is stopped or restarted. When Healthcheck's account can't
+see the service's process (it runs as another user, and Healthcheck doesn't sign in as root), no conclusion is drawn
+from its connections. Cost: one more short command per running service (a `ss` and, for jars, a few `curl` requests);
+on a server where each SSH command takes ~1 s to set up, Check status takes that much longer per service.
+
 **The heartbeat's warning.** When a beat finds a running WildFly that can't receive traffic, or whose
-datasources can't connect, a red **"WildFly has issues, please check"** popup appears on top of any page of
-the tool. It names the server, says what's wrong in plain words (failing databases as chips), and offers
+datasources can't connect, or any running service that isn't working (*Can it do its job?*), a red
+**"<service> has issues, please check"** popup appears on top of any page of the tool. It names the server, says what's wrong in plain words (failing databases as chips), and offers
 **Open <server>** or **Dismiss**. Nothing is stopped or restarted. A dismissed warning comes back at the next
 beat if the problem is still there. The page asks `GET /api/alerts` every 30 seconds for what the latest beat
 found. Problems found by a Start/Restart run don't use this popup, because the run already asks you in its own.
@@ -872,20 +958,32 @@ to**, **Blocked from starting**). Each entry says who did it:
 
 ### Crash alerts
 
-When a service that **had been running fine** starts crashing over and over, Healthcheck raises an alert. It
-**never stops the service**. The alert says how many times it crashed, why, and how the server looks:
+When a service keeps crashing over and over, with systemd restarting it each time, Healthcheck raises an alert.
+It **never stops the service by itself**, but the alert has a **Stop** button. The alert says how many times it
+crashed, why, and how the server looks:
 
-- **A popup** for everyone with Healthcheck open, for example: "voucher-backend keeps crashing: 14 times since
-  2:17 PM, the last at 2:55 PM. It had been running fine for 3 days before. **Why:** The database password has
-  expired." It also shows the server's disks and memory, and **Show the error from its log**. Dismissed, it
-  comes back at the next check if the service is still crashing.
-- **On the server page** the service moves to the top, under **Needs attention → Keeps crashing**, with the
-  count and the reason, and counts as "With a problem".
+- **A popup** for everyone with Healthcheck open, for example: "voucher-management keeps crashing: 53 times since
+  4:06 PM, the last at 4:33 PM. It never got going: it first crashed 7 seconds after it was started when the
+  server started up. **Why:** A file it needs is missing: /Data/system-modules/voucher-management/conf/application.properties".
+  It also shows the server's disks and memory, and **Show the error from its log**. Dismissed, it comes back at
+  the next check if the service is still crashing.
+- **Stop *service*** in the popup (for people with the **Start / Restart / Stop a service** permission; others
+  see who can): after "Are you sure?", Healthcheck stops it (`systemctl stop`) as a normal run, shown on the
+  server's page.
+  - **The stop order isn't checked** here: a service that keeps crashing serves nothing that sits on top of it.
+  - **It stays stopped** until someone starts it (on the server page, Start All, or a terminal). A restart of the
+    server starts it again (it's still set to start with the server), and if it still crashes the popup comes back.
+  - **On the server page** it then says "Stopped because it kept crashing (53 times), by sam, today 16:40", with
+    the reason, until it is started again.
+- **On the server page** a service that keeps crashing moves to the top, under **Needs attention → Keeps
+  crashing**, with the count and the reason, and counts as "With a problem".
 
-**When:** a service that had been up for at least `CRASH_RUNNING_FINE_MINUTES` (20) crashes `CRASH_ALERT_COUNT`
-(3) times in a row, each crash less than `CRASH_LOOP_MINUTES` (60) after systemd restarted it. Only that case:
-- **No alert for crashes right after a start**: the server starting up, someone starting it from a terminal, or a
-  Start in Healthcheck (Healthcheck's own starts already try 3 times, then stop it and show the error).
+**When:** each crash less than `CRASH_LOOP_MINUTES` (60) after systemd restarted it, and:
+- **Right after a start** (it never ran `CRASH_RUNNING_FINE_MINUTES` (20)): `CRASH_START_ALERT_COUNT` (5) crashes
+  in a row, when the start came from the server starting up, a terminal or outside Healthcheck. The popup says who
+  started it.
+- **After running fine** for at least 20 minutes: `CRASH_ALERT_COUNT` (3) crashes in a row.
+- **Never after a Start in Healthcheck:** Healthcheck's own starts already try 3 times, then stop it and ask you.
 - **No alert for a single crash**, or a crash that someone caused (a stop, a `kill`).
 
 **Checked:** every hour (`CRASH_CHECK_CRON`), and at every background check, Check status and run. The check
@@ -893,16 +991,22 @@ reads the service history from the journal, so it needs journal access (see [Ser
 
 **The reason** comes from the service's log file (its log path in the Software Catalog) or, if it writes to the
 journal, from that: the last error, from the crash's first `ERROR` line, with the stack trace cut down to what
-says why. It's put in plain words when it's a known case: an expired or wrong database password, a database or
-broker it can't reach, its port taken by another program, out of memory, a full disk, missing or broken program
-files, a file it may not read. Otherwise it says how it ends ("exit code 1") with the error below.
+says why. It's put in plain words when it's a known case:
+- an expired or wrong database password, or a database or broker it can't reach;
+- its ports taken, each named with **who holds it** ("Its ports 9663 and 7443 are already used by another
+  program: 7443 by WSO2 Streaming Integrator (wso2si.service)"), found the same way a Start in Healthcheck does;
+- a missing file, **named** (Spring Boot's missing settings file, Java's `FileNotFoundException`);
+- out of memory, a full disk, missing or broken program files, a file it may not read.
+
+Otherwise it says how it ends ("exit code 1") with the error below.
 
 **The server's state:** free space on `/`, `/Data`, `/var`, `/tmp` and the log's folder, free memory, and whether
 the kernel killed processes for lack of memory since the crashes began. A disk 90% full or more, or under 10%
 memory free, is shown in red. All read-only; read again at most every 10 minutes while it keeps crashing.
 
 **When it ends:**
-- **Someone starts or stops it** (in Healthcheck or a terminal): the alert closes.
+- **Someone starts or stops it** (in Healthcheck or a terminal): the alert closes. Stopped with the alert's own
+  **Stop**, it stays as "Stopped because it kept crashing" until it's started.
 - **It runs fine again** for `CRASH_RUNNING_FINE_MINUTES`: the alert closes.
 - **systemd gives up** restarting it: the alert stays, saying it's down, until someone starts it.
 

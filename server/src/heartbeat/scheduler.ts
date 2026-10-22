@@ -3,9 +3,11 @@ import pLimit from 'p-limit';
 import { sqlite, insertRow } from '../db/client.js';
 import { getConnection } from '../ssh/connectionManager.js';
 import { checkComponent, detectInstalled } from '../scan/detectors.js';
-import type { ComponentState } from '../scan/detectors.js';
+import type { ComponentCheck, ComponentState } from '../scan/detectors.js';
+import { accountProblemsSeenLater } from '../scan/serviceHealth.js';
 import { env } from '../env.js';
 import { readServiceHistory } from '../scan/history.js';
+import { isArtemis } from '../scan/artemis.js';
 import type { SoftwareDefinition, Server as ServerRow } from '@healthcheck/shared';
 
 const limit = pLimit(5);
@@ -61,6 +63,7 @@ export async function checkGroup(groupId: number) {
   // Per component: what each server reported. Only a clean "not installed" from EVERY server
   // (no unreachable hosts, no failed probes) counts as "this group doesn't have it".
   const outcomes = new Map<number, ('missing' | 'present' | 'unknown')[]>();
+  const checked: { serverId: number; def: SoftwareDefinition; result: ComponentCheck }[] = [];
   const note = (defId: number, outcome: 'missing' | 'present' | 'unknown') =>
     outcomes.set(defId, [...(outcomes.get(defId) ?? []), outcome]);
 
@@ -81,10 +84,14 @@ export async function checkGroup(groupId: number) {
           return;
         }
 
+        // this server runs Artemis itself: a service that can't reach it is told why
+        const artemisHere = assignedDefs.some((d) => isArtemis(d));
         for (const def of assignedDefs) {
           try {
-            const { up, state, detail } = await checkComponent(client, def);
+            const result = await checkComponent(client, def, { artemisHere, serverId: server.id });
+            const { up, state, detail } = result;
             record(server.id, def.id, 'heartbeat', up, detail);
+            checked.push({ serverId: server.id, def, result });
             note(def.id, state === 'not_installed' ? 'missing' : 'present');
           } catch (err: any) {
             record(server.id, def.id, 'heartbeat', false, `unreachable: ${String(err?.message ?? err)}`);
@@ -109,6 +116,13 @@ export async function checkGroup(groupId: number) {
       })
     )
   );
+
+  // a service looked at before another one's log showed their database account locked hears about it now
+  for (const c of checked) {
+    if (c.result.state !== 'running' || !c.result.accounts?.length) continue;
+    const problems = accountProblemsSeenLater(c.serverId, c.def.id, c.result.accounts, c.result.dbConnections ?? null);
+    if (problems.length > 0) record(c.serverId, c.def.id, 'heartbeat', false, `unhealthy:${problems.join(' ')}`);
+  }
 
   // A group only lists what's installed on its servers: drop members no server has.
   if (groupServers.length > 0) {

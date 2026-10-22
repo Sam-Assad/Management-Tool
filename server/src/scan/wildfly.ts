@@ -2,6 +2,7 @@ import type { Client } from 'ssh2';
 import type { SoftwareDefinition } from '@healthcheck/shared';
 import { runCommand } from '../ssh/exec.js';
 import { env } from '../env.js';
+import { parseAttributeList, wildflyAccounts, type DbAccount } from './dbAccounts.js';
 
 // A password/credential that has expired will fail exactly the same way every attempt (DB login,
 // LDAP bind, a keystore password, ...) - retrying it is pointless and just wastes the wait. Covers the
@@ -32,6 +33,8 @@ export interface DatasourceCheck {
   tested: string[];
   failures: DatasourceFailure[];
   note?: string;
+  // the database accounts its datasources sign in with (user name, JNDI name, database), for its log's account errors
+  accounts?: DbAccount[];
 }
 
 function shQuote(value: string): string {
@@ -109,6 +112,14 @@ export function parseChildNames(reply: string): { names: string[]; error?: strin
 }
 
 const BINDINGS_COMMAND = '/socket-binding-group=*/socket-binding=*:read-resource(include-runtime=true)';
+// read per datasource kind (an XA datasource has no connection-url: its database stays unknown)
+const ACCOUNT_ATTRIBUTES: [Kind, string][] = [
+  ['data-source', 'user-name'],
+  ['data-source', 'jndi-name'],
+  ['data-source', 'connection-url'],
+  ['xa-data-source', 'user-name'],
+  ['xa-data-source', 'jndi-name'],
+];
 
 export async function checkWildFlyDatasources(client: Client): Promise<DatasourceCheck & { bindingsOutput?: string }> {
   try {
@@ -117,6 +128,7 @@ export async function checkWildFlyDatasources(client: Client): Promise<Datasourc
     let xa: { names: string[]; error?: string };
     let bindingsOutput: string | undefined;
     let discovered: Map<string, string> | null = null;
+    let accounts: DbAccount[] = [];
     try {
       discovered = await cliScript(
         client,
@@ -124,6 +136,8 @@ export async function checkWildFlyDatasources(client: Client): Promise<Datasourc
           { key: 'ds', command: '/subsystem=datasources:read-children-names(child-type=data-source)' },
           { key: 'xa', command: '/subsystem=datasources:read-children-names(child-type=xa-data-source)' },
           { key: 'bindings', command: BINDINGS_COMMAND },
+          // the user names, not the passwords
+          ...ACCOUNT_ATTRIBUTES.map(([kind, attr]) => ({ key: `${kind}-${attr}`, command: `/subsystem=datasources/${kind}=*:read-attribute(name=${attr},resolve-expressions=true)` })),
         ],
         90_000,
       );
@@ -134,6 +148,8 @@ export async function checkWildFlyDatasources(client: Client): Promise<Datasourc
       regular = parseChildNames(discovered.get('ds')!);
       xa = parseChildNames(discovered.get('xa')!);
       bindingsOutput = discovered.get('bindings');
+      const attr = (kind: Kind, name: string) => parseAttributeList(discovered!.get(`${kind}-${name}`) ?? '');
+      accounts = (['data-source', 'xa-data-source'] as Kind[]).flatMap((k) => wildflyAccounts(attr(k, 'user-name'), attr(k, 'jndi-name'), attr(k, 'connection-url')));
     } else {
       // the one-call script didn't run (couldn't connect, an unexpected CLI) - the original one-call-per-list way
       [regular, xa] = await Promise.all([list(client, 'data-source'), list(client, 'xa-data-source')]);
@@ -163,7 +179,7 @@ export async function checkWildFlyDatasources(client: Client): Promise<Datasourc
       if (!r || r.outcome === 'unknown') r = await testOne(client, t.kind, t.name);
       if (r.outcome !== 'success') failures.push({ name: t.name, reason: r.detail || 'test-connection-in-pool failed' });
     }
-    return { checked: true, tested: targets.map((t) => t.name), failures, bindingsOutput };
+    return { checked: true, tested: targets.map((t) => t.name), failures, bindingsOutput, accounts };
   } catch (err: any) {
     return { checked: false, tested: [], failures: [], note: `Could not run the datasource check: ${String(err?.message ?? err)}` };
   }

@@ -32,8 +32,12 @@ export const CATALOG_FIELDS = [
   'success_pattern',
   'error_pattern',
   'health_timeout_s',
+  'needs_database',
+  'needs_artemis',
 ] as const;
 type CatalogField = (typeof CATALOG_FIELDS)[number];
+// fields added later: what an older defaults file or snapshot (which doesn't have them) means
+const FIELD_DEFAULTS: Partial<Record<CatalogField, number>> = { needs_database: 0, needs_artemis: 0 };
 type CatalogValues = Record<CatalogField, string | number | null>;
 
 export interface CatalogEntry extends CatalogValues {
@@ -70,7 +74,7 @@ const conditionKey = (c: { type: string; subject: string; target: string }) => `
 
 function pickValues(source: Record<string, unknown>): CatalogValues {
   const out = {} as CatalogValues;
-  for (const f of CATALOG_FIELDS) out[f] = (source[f] ?? null) as string | number | null;
+  for (const f of CATALOG_FIELDS) out[f] = (source[f] ?? FIELD_DEFAULTS[f] ?? null) as string | number | null;
   return out;
 }
 
@@ -135,8 +139,8 @@ export function applyBundledDefaults(options: { force?: boolean } = {}): Default
             .prepare(
               `INSERT INTO software_definitions
                  (name, kind, detect_method, detect_value, start_cmd, stop_cmd, restart_method, start_script_path,
-                  stop_script_path, log_path, success_pattern, error_pattern, health_timeout_s, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                  stop_script_path, log_path, success_pattern, error_pattern, health_timeout_s, needs_database, needs_artemis, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             )
             .run(
               entry.name,
@@ -152,6 +156,8 @@ export function applyBundledDefaults(options: { force?: boolean } = {}): Default
               shipped.success_pattern,
               shipped.error_pattern,
               shipped.health_timeout_s ?? 120,
+              shipped.needs_database ?? 0,
+              shipped.needs_artemis ?? 0,
               new Date().toISOString()
             );
           result.addedSoftware.push(entry.name);
@@ -160,8 +166,10 @@ export function applyBundledDefaults(options: { force?: boolean } = {}): Default
         const changed = CATALOG_FIELDS.filter((f) => {
           if (row[f] === shipped[f]) return false;
           if (force) return true;
-          // the vendor changed this field since the last load, and the customer never touched it
-          return Boolean(before) && row[f] === before[f] && shipped[f] !== before[f];
+          // the vendor changed this field since the last load, and the customer never touched it (a field newer
+          // than the last load was shipped as its default)
+          const was = before && (f in before ? before[f] : (FIELD_DEFAULTS[f] ?? null));
+          return Boolean(before) && row[f] === was && shipped[f] !== was;
         });
         if (changed.length > 0) {
           sqlite

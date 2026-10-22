@@ -20,7 +20,10 @@ import {
   useStopOne,
   useArtemisStatus,
   useArtemisCheckNow,
+  useClearDlq,
   useBeatAlerts,
+  useDbAccountTroubles,
+  useDbAccountFixed,
 } from '../api/hooks';
 import type { ServerSummary } from '../api/hooks';
 import JobProgressPanel from '../components/JobProgressPanel';
@@ -48,10 +51,26 @@ function when(iso: string): string {
 
 // Artemis's last reading, in a box at the top of the page: DLQ, ExpiryQueue and memory, when and how it was
 // read, and Check now. Red when memory is at or over the limit.
-function ArtemisBox({ serverId }: { serverId: number }) {
+function ArtemisBox({
+  serverId,
+  serverName,
+  busy,
+  onClearDlq,
+}: {
+  serverId: number;
+  serverName: string;
+  busy: boolean; // a run is going on this server
+  onClearDlq: (confirmText: string) => void;
+}) {
   const can = useCan();
-  const { data } = useArtemisStatus(serverId);
+  const { data, refetch } = useArtemisStatus(serverId);
   const checkNow = useArtemisCheckNow(serverId);
+  // a run just ended (Clear DLQ, a start or restart of Artemis): show the reading it left
+  const wasBusy = useRef(busy);
+  useEffect(() => {
+    if (wasBusy.current && !busy) refetch();
+    wasBusy.current = busy;
+  }, [busy]);
   if (!data?.has_artemis) return null;
   const last = data.latest;
   const r = last?.report;
@@ -61,6 +80,16 @@ function ArtemisBox({ serverId }: { serverId: number }) {
       ? { used: size(r.heapUsedBytes), max: size(r.heapMaxBytes), pct: r.heapPercent }
       : null;
   const unread = (v: number | null | undefined) => (v === null || v === undefined ? (last ? "couldn't read" : 'not read yet') : v === 1 ? 'message' : 'messages');
+  const dlq = r?.dlq ?? null;
+  const clearTip = !can('manage_users')
+    ? 'Only admins can clear the DLQ.'
+    : busy
+      ? 'A run is going on this server. Wait for it to finish.'
+      : dlq === null
+        ? "The DLQ hasn't been read. Check now first."
+        : dlq === 0
+          ? 'The DLQ is empty.'
+          : 'Removes every message in the DLQ (like removeAllMessages in the Artemis console). The DLQ itself stays. The messages cannot be recovered.';
 
   return (
     <section className={`sv-artemis${danger ? ' sv-artemis-danger' : ''}`} aria-labelledby="sv-artemis-title">
@@ -91,6 +120,22 @@ function ArtemisBox({ serverId }: { serverId: number }) {
           <span className="an-label">DLQ</span>
           <b>{r?.dlq ?? '—'}</b>
           <span className="an-sub">{unread(r?.dlq)}</span>
+          <button
+            className="sv-clear-dlq"
+            disabled={!can('manage_users') || busy || !dlq}
+            title={clearTip}
+            onClick={() =>
+              last &&
+              dlq &&
+              onClearDlq(
+                `Remove all ${dlq.toLocaleString('en-US')} messages from the DLQ on ${serverName}? (That's the count read ${when(last.checked_at)}.)\n\n` +
+                  'The same as Operations > removeAllMessages() in the Artemis console. The DLQ itself stays, empty. ' +
+                  "The messages can't be recovered: once removed, nobody can look at them or send them again. Artemis keeps running, and no other queue is touched.",
+              )
+            }
+          >
+            Clear DLQ
+          </button>
         </div>
         <div className={`an-stat${r?.expiry ? ' an-stat-flag' : ''}`}>
           <span className="an-label">ExpiryQueue</span>
@@ -150,7 +195,7 @@ const LOCKED = 'Something is already running on this server - wait for it to fin
 // working = green, has a problem = red, stopped (nothing wrong, just not running) = gray
 type Tone = 'ok' | 'bad' | 'stopped' | 'busy' | 'idle';
 // a service in one of these states is running (Start greyed out) / not running (Stop greyed out)
-const RUNNING_STATES = new Set(['running', 'datasource_down', 'not_ready', 'starting']);
+const RUNNING_STATES = new Set(['running', 'datasource_down', 'not_ready', 'unhealthy', 'starting']);
 const STOPPED_STATES = new Set(['stopped', 'failed', 'credential_expired', 'not_installed']);
 
 // the count tiles in the status box, always in this order so the eye learns where to look
@@ -160,7 +205,7 @@ const TILES: { tone: Tone; label: string; onlyWhenAny?: boolean }[] = [
   { tone: 'stopped', label: 'Stopped' },
   { tone: 'busy', label: 'Starting or stopping', onlyWhenAny: true },
 ];
-type GroupId = 'crashing' | 'datasource_down' | 'not_ready' | 'credential_expired' | 'failed' | 'unreachable' | 'stopped' | 'busy' | 'working' | 'idle';
+type GroupId = 'crashing' | 'datasource_down' | 'not_ready' | 'unhealthy' | 'credential_expired' | 'failed' | 'unreachable' | 'stopped' | 'busy' | 'working' | 'idle';
 
 // a service with an open crash alert (it had been running fine and keeps crashing), whatever its state right now
 const CRASHING_VIEW: { label: string; tone: Tone; group: GroupId } = { label: 'Keeps crashing', tone: 'bad', group: 'crashing' };
@@ -169,6 +214,7 @@ const STATE_VIEW: Record<string, { label: string; tone: Tone; group: GroupId }> 
   running: { label: 'Working', tone: 'ok', group: 'working' },
   datasource_down: { label: "Can't reach its database", tone: 'bad', group: 'datasource_down' },
   not_ready: { label: "Can't receive traffic", tone: 'bad', group: 'not_ready' },
+  unhealthy: { label: 'Running, but not working', tone: 'bad', group: 'unhealthy' },
   credential_expired: { label: 'Password expired', tone: 'bad', group: 'credential_expired' },
   failed: { label: 'Stopped with an error', tone: 'bad', group: 'failed' },
   unreachable: { label: "Couldn't be checked", tone: 'bad', group: 'unreachable' },
@@ -186,7 +232,7 @@ const GROUPS: { id: GroupId; title: string; advice: string }[] = [
     id: 'crashing',
     title: 'Keeps crashing',
     advice:
-      "These had been running fine and now keep crashing; systemd restarts them each time. Healthcheck doesn't stop them. The alert says why, and their history and log say more.",
+      "These keep crashing; systemd restarts them each time. Healthcheck doesn't stop them unless someone presses Stop in the alert. The alert says why, and their history and log say more.",
   },
   {
     id: 'datasource_down',
@@ -199,6 +245,12 @@ const GROUPS: { id: GroupId; title: string; advice: string }[] = [
     title: "Can't receive traffic",
     advice:
       "It's running and its database connections work, but it isn't accepting requests, so people can't reach the applications on it. Restart it, or open its log to see why.",
+  },
+  {
+    id: 'unhealthy',
+    title: 'Running, but not working',
+    advice:
+      "These run, but can't do their job: they have no connection to the database or Artemis they need, their database account is locked or its password expired, or they don't answer requests. Each one says why. Fix what's named first (start Artemis, have the account unlocked), then Restart it. A service whose database account is locked or expired would stop working completely if restarted before that.",
   },
   {
     id: 'credential_expired',
@@ -316,6 +368,10 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
   const stopAll = useStopAll(id);
   const restartOne = useRestartOne();
   const stopOne = useStopOne();
+  const clearDlq = useClearDlq(server.id);
+  // services whose database account the logs showed locked / expired: "It's fixed" on their rows
+  const { data: accountTroubles } = useDbAccountTroubles(server.id);
+  const accountFixed = useDbAccountFixed(server.id);
 
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
   const [logSoftwareId, setLogSoftwareId] = useState<number | null>(null);
@@ -361,6 +417,14 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
       })
       .catch(() => {});
   }, [id]);
+  // a run started elsewhere (the crash popup's Stop) and sent here to be watched
+  useEffect(() => {
+    const jobId = (location.state as any)?.jobId;
+    if (typeof jobId === 'number') {
+      setActiveJobId(jobId);
+      setJobRunning(true);
+    }
+  }, [location.key]);
 
   // Run an action that starts a job, and show that job.
   async function runJob(start: () => Promise<{ jobId: number }>, confirmText?: string) {
@@ -371,6 +435,28 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
       const { jobId } = await start();
       setActiveJobId(jobId);
       setJobRunning(true);
+    } catch (err) {
+      setActionError(errorMessage(err));
+    }
+  }
+
+  // "It's fixed" on a service whose database account the logs showed locked / expired / refused
+  async function markAccountFixed(s: Service, users: string[]) {
+    const names = users.length > 1 ? `${users.slice(0, -1).join(', ')} and ${users[users.length - 1]}` : users[0] ?? 'its database account';
+    if (
+      !confirm(
+        `Does ${names} work again (unlocked, or its password renewed or corrected)?\n\n` +
+          `Healthcheck stops showing this error on every service that signs in with ${users.length > 1 ? 'them' : 'it'}, and looks at them again now. ` +
+          'If it still fails, the next error in a log brings it back.',
+      )
+    )
+      return;
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      const r = await accountFixed.mutateAsync(s.id);
+      setActionNotice(`Marked ${names} as fixed. Looked at ${r.rechecked === 1 ? '1 service' : `${r.rechecked} services`} again.`);
+      refetchStatus();
     } catch (err) {
       setActionError(errorMessage(err));
     }
@@ -445,6 +531,10 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
   const crashBySoftware = new Map(
     (beatAlerts?.alerts ?? []).filter((a) => a.kind === 'crash' && a.server_id === server.id && a.crash).map((a) => [a.software_id, a]),
   );
+  // stopped from the crash popup, and not started since
+  const crashStoppedBySoftware = new Map(
+    (beatAlerts?.crash_stopped ?? []).filter((a) => a.server_id === server.id && a.crash).map((a) => [a.software_id, a]),
+  );
   const ordered = [...(softwareList ?? [])].sort((a: any, b: any) => a.sequence_order - b.sequence_order);
   const logSoftware = allSoftware?.find((s: any) => s.id === logSoftwareId);
 
@@ -461,6 +551,7 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
       state,
       view,
       crash,
+      crashStopped: crash ? null : (crashStoppedBySoftware.get(item.software_id) ?? null),
       datasources,
       // a closed database warning comes back if a different set of datasources starts failing
       alertKey: `${server.id}|${item.software.name}|${[...datasources].sort().join(',')}`,
@@ -521,8 +612,10 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
   const tip = (p: Permission, normal?: string) => (!can(p) ? NO_PERMISSION : (busyTitle ?? normal));
 
   const renderRow = (s: Service) => {
-    const down = (s.view.tone === 'bad' || s.view.tone === 'stopped') && s.state !== 'datasource_down' && s.state !== 'not_ready' && s.state !== 'unreachable';
+    const down = (s.view.tone === 'bad' || s.view.tone === 'stopped') && s.state !== 'datasource_down' && s.state !== 'not_ready' && s.state !== 'unhealthy' && s.state !== 'unreachable';
     const showDsCallout = s.datasources.length > 0 && !dismissedAlerts.includes(s.alertKey);
+    // its database account is locked / expired: restarting would make it worse, so "It's fixed" is the next step
+    const accountTrouble = RUNNING_STATES.has(s.state) && s.state !== 'running' ? accountTroubles?.find((t) => t.software_id === s.id) : undefined;
     return (
       <li key={s.id} id={`svc-${s.id}`} className={`sv-row sv-tone-${s.view.tone}`}>
         <StateIcon tone={s.view.tone} />
@@ -537,7 +630,26 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
               {s.crash.crash.reason ? `. ${s.crash.crash.reason}` : ''}
             </div>
           )}
-          {s.state === 'not_ready' && s.rawDetail && <div className="sv-state">{s.rawDetail}</div>}
+          {s.crashStopped?.crash && (
+            <div className="sv-state">
+              Stopped because it kept crashing ({s.crashStopped.crash.count} times)
+              {s.crashStopped.crash.stopped_by ? `, by ${s.crashStopped.crash.stopped_by}` : ''}
+              {s.crashStopped.crash.stopped_at ? `, ${when(s.crashStopped.crash.stopped_at)}` : ''}.
+              {s.crashStopped.crash.reason ? ` ${s.crashStopped.crash.reason}` : ''} Fix that before starting it again.
+            </div>
+          )}
+          {(s.state === 'not_ready' || s.state === 'unhealthy') && s.rawDetail && <div className="sv-state">{s.rawDetail}</div>}
+          {accountTrouble && (
+            <button
+              className="sv-fixed"
+              disabled={!can('check_status') || accountFixed.isPending}
+              title={can('check_status') ? 'Once the database account works again: stops showing this error and looks again.' : NO_PERMISSION}
+              onClick={() => markAccountFixed(s, accountTrouble.users)}
+            >
+              {accountFixed.isPending && accountFixed.variables === s.id ? 'Looking again…' : "It's fixed"}
+            </button>
+          )}
+          {s.state === 'running' && s.rawDetail && <div className="sv-note">{s.rawDetail}</div>}
           {s.datasources.length > 0 && !showDsCallout && (
             <div className="sv-state">
               {s.datasources.length} database connection{s.datasources.length > 1 ? 's' : ''} failing
@@ -579,7 +691,7 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
             Start
           </button>
           <button
-            className={`sv-act${s.state === 'datasource_down' || s.state === 'not_ready' ? ' sv-start' : ''}`}
+            className={`sv-act${(s.state === 'datasource_down' || s.state === 'not_ready' || s.state === 'unhealthy') && !accountTrouble ? ' sv-start' : ''}`}
             disabled={off('restart_one')}
             title={tip('restart_one')}
             onClick={() => runJob(() => restartOne.mutateAsync({ serverId: server.id, softwareId: s.id }), `Restart ${s.name} on ${server.name}?`)}
@@ -652,7 +764,12 @@ function ServerView({ server, onServerChanged }: { server: ServerSummary; onServ
         </div>
       </header>
 
-      <ArtemisBox serverId={server.id} />
+      <ArtemisBox
+        serverId={server.id}
+        serverName={server.name}
+        busy={jobRunning}
+        onClearDlq={(confirmText) => runJob(() => clearDlq.mutateAsync(), confirmText)}
+      />
 
       {/* the verdict: one line, then one cell per service in the order of the list below */}
       <section className={`sv-verdict sv-verdict-${verdict.tone}`} aria-labelledby="sv-verdict-title">

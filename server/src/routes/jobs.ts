@@ -9,6 +9,7 @@ import {
   runRestartOne,
   runStopOne,
   runScan,
+  runClearDlq,
   submitDecision,
   acceptStep,
   isAcceptable,
@@ -45,6 +46,25 @@ jobsRouter.post('/groups/:groupId/scan', startsJob((req) => runScan(groupOf(req)
 jobsRouter.post('/servers/:serverId/software/:softwareId/start', startsJob((req) => runStartOne(...pairOf(req))));
 jobsRouter.post('/servers/:serverId/software/:softwareId/restart', startsJob((req) => runRestartOne(...pairOf(req))));
 jobsRouter.post('/servers/:serverId/software/:softwareId/stop', startsJob((req) => runStopOne(...pairOf(req))));
+// Clear DLQ in the Artemis box (admins): deletes every message in the server's Artemis DLQ
+jobsRouter.post('/servers/:serverId/artemis/clear-dlq', startsJob((req) => runClearDlq(Number(req.params.serverId))));
+// The crash popup's Stop, for a service that keeps crashing. Its alert remembers the run, who and when: once the
+// history shows that stop, the server page says "Stopped because it kept crashing" until someone starts it.
+jobsRouter.post(
+  '/servers/:serverId/software/:softwareId/stop-crashing',
+  startsJob(async (req) => {
+    const [serverId, softwareId] = pairOf(req);
+    const alert = sqlite
+      .prepare("SELECT id FROM crash_alerts WHERE server_id = ? AND software_id = ? AND state = 'crashing' ORDER BY id DESC LIMIT 1")
+      .get(serverId, softwareId) as { id: number } | undefined;
+    if (!alert) throw new RefusedError("It isn't crashing any more. If it should still be stopped, use Stop on the server's page.");
+    const job = await runStopOne(serverId, softwareId, { keepsCrashing: true });
+    sqlite
+      .prepare('UPDATE crash_alerts SET stop_job_id = ?, stopped_by = ?, stopped_at = ? WHERE id = ?')
+      .run(job.id, req.user?.username ?? null, new Date().toISOString(), alert.id);
+    return job;
+  }),
+);
 
 jobsRouter.get(
   '/jobs',

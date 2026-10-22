@@ -184,7 +184,7 @@ export default function ServersDashboard() {
   const components = list.flatMap((s) => s.software);
   const running = components.filter((c) => c.state === 'running').length;
   const stopped = components.filter((c) => c.state === 'stopped').length;
-  const problems = components.filter((c) => ['failed', 'unreachable', 'unknown', 'credential_expired', 'datasource_down', 'not_ready'].includes(c.state)).length;
+  const problems = components.filter((c) => ['failed', 'unreachable', 'unknown', 'credential_expired', 'datasource_down', 'not_ready', 'unhealthy'].includes(c.state)).length;
   const percent = components.length > 0 ? Math.round((running / components.length) * 100) : null;
   const serverOfGroup = new Map(list.map((s) => [s.group_id, s]));
 

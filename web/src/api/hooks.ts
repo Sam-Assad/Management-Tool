@@ -233,14 +233,16 @@ export interface CrashFacts {
 }
 
 export interface BeatAlert {
-  // wildfly: can't take traffic / database problem; artemis: its own beat found memory too high;
-  // crash: a service that had been running fine keeps crashing (crashing), or systemd gave up on it (gave_up)
-  kind: 'wildfly' | 'artemis' | 'crash';
+  // wildfly: can't take traffic / database problem; health: a running service that can't do its job (no connection
+  // to the database / Artemis it needs, or it doesn't answer requests); artemis: its own beat found memory too high;
+  // crash: a service keeps crashing (crashing), systemd gave up on it (gave_up), or it was stopped from the alert
+  // (stopped: only in crash_stopped, for the server page)
+  kind: 'wildfly' | 'artemis' | 'crash' | 'health';
   server_id: number;
   server_name: string;
   software_id: number;
   software_name: string;
-  state: 'not_ready' | 'datasource_down' | 'memory_high' | 'crashing' | 'gave_up';
+  state: 'not_ready' | 'datasource_down' | 'unhealthy' | 'memory_high' | 'crashing' | 'gave_up' | 'stopped';
   detail: string | null;
   artemis?: ArtemisReport;
   crash?: {
@@ -248,9 +250,14 @@ export interface BeatAlert {
     first_crash_at: string;
     last_crash_at: string;
     ran_for_s: number | null; // how long it had been running before the crashes began (null = longer than Healthcheck knows)
+    after_start: boolean; // it crashes right after a start, rather than after running fine
+    started_source: 'boot' | 'terminal' | 'outside' | 'reboot' | null; // who started it then
+    started_actor: string | null;
     reason: string | null;
     excerpt: string | null; // the error from its log
     facts: CrashFacts | null; // the server's disks and memory
+    stopped_by: string | null; // stopped with the alert's Stop button
+    stopped_at: string | null;
   };
   checked_at: string;
 }
@@ -287,6 +294,11 @@ export function useArtemisCheckNow(serverId: number) {
   });
 }
 
+// Clear DLQ (admins): a run that deletes every message in the server's Artemis DLQ.
+export function useClearDlq(serverId: number) {
+  return useMutation({ mutationFn: () => api.post<{ jobId: number }>(`/servers/${serverId}/artemis/clear-dlq`) });
+}
+
 // The background check's interval in words: 120 -> "2 hours", 60 -> "hour", 30 -> "30 minutes".
 export function intervalText(minutes: number): string {
   if (minutes % 60 === 0) return minutes === 60 ? 'hour' : `${minutes / 60} hours`;
@@ -319,8 +331,12 @@ export interface ServiceEvent {
 
 // "6 days", "3 hours", "25 minutes"
 export function durationText(seconds: number): string {
+  if (seconds < 60) {
+    const s = Math.max(1, Math.round(seconds));
+    return `${s} second${s === 1 ? '' : 's'}`;
+  }
   const m = Math.round(seconds / 60);
-  if (m < 90) return `${Math.max(1, m)} minute${m === 1 ? '' : 's'}`;
+  if (m < 90) return `${m} minute${m === 1 ? '' : 's'}`;
   const h = Math.round(m / 60);
   if (h < 48) return `${h} hours`;
   return `${Math.round(h / 24)} days`;
@@ -351,8 +367,45 @@ export function useBeatAlerts() {
   return useQuery({
     queryKey: ['alerts'],
     queryFn: () =>
-      api.get<{ interval_minutes: number | null; artemis_schedule: string; crash_check_minutes: number | null; alerts: BeatAlert[] }>('/alerts'),
+      api.get<{
+        interval_minutes: number | null;
+        artemis_schedule: string;
+        crash_check_minutes: number | null;
+        alerts: BeatAlert[];
+        crash_stopped: BeatAlert[];
+      }>('/alerts'),
     refetchInterval: 30000,
+  });
+}
+
+// The services on a server whose database account the logs showed locked / expired / refused, not marked fixed yet
+// ("It's fixed" is offered on their rows). `users`: the accounts, empty when the log didn't say which.
+export function useDbAccountTroubles(serverId: number) {
+  return useQuery({
+    queryKey: ['servers', serverId, 'db-account-troubles'],
+    queryFn: () => api.get<{ software_id: number; users: string[] }[]>(`/servers/${serverId}/db-account-troubles`),
+    refetchInterval: 15000,
+  });
+}
+
+// "It's fixed": the account's errors so far are left out on every service that signs in with it, and those are
+// looked at again (answers once that's done, a few seconds).
+export function useDbAccountFixed(serverId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (softwareId: number) => api.post<{ users: string[]; rechecked: number }>(`/servers/${serverId}/software/${softwareId}/db-account-fixed`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['servers'] });
+      qc.invalidateQueries({ queryKey: ['groups'] });
+    },
+  });
+}
+
+// The crash popup's Stop: stops a service that keeps crashing (without the stop order's check).
+export function useStopCrashing() {
+  return useMutation({
+    mutationFn: ({ serverId, softwareId }: { serverId: number; softwareId: number }) =>
+      api.post<{ jobId: number }>(`/servers/${serverId}/software/${softwareId}/stop-crashing`),
   });
 }
 

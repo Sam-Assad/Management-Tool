@@ -786,6 +786,11 @@ button.danger:hover { border-color: var(--bad); box-shadow: 0 4px 14px rgba(215,
 .ba-reason { display: block; margin-top: 6px; color: #2b2f35; }
 .ba-reason b { color: inherit; }
 .ba-crash-facts { display: flex; flex-wrap: wrap; gap: 2px 14px; }
+/* its Stop button (one per service when several are listed) */
+.ba-item-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 8px; }
+.ba-stop { padding: 5px 12px; font-size: 12.5px; }
+.ba-stop-note { font-size: 12.5px; }
+.ba-stop-error { display: block; width: 100%; font-size: 12.5px; color: var(--bad); }
 .ba-warn { color: var(--bad); font-weight: 600; }
 .ba-error { margin-top: 8px; }
 .ba-error summary { cursor: pointer; font-size: 13px; font-weight: 600; color: #3a3f47; }
@@ -881,6 +886,11 @@ button.danger:hover { border-color: var(--bad); box-shadow: 0 4px 14px rgba(215,
 .ur-list { list-style: none; margin: 4px 0 0; padding: 0; width: 100%; display: flex; flex-direction: column; gap: 10px; text-align: left; }
 .ur-name { display: block; margin-bottom: 4px; font-size: 13.5px; }
 .stacked-form.wide { max-width: none; }
+/* the catalog's "Needs the database / Artemis" boxes */
+.cat-needs { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px 10px; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.cat-needs legend { font-size: 13px; color: var(--muted-foreground); padding: 0 4px; }
+.stacked-form .cat-needs label { flex-direction: row; align-items: center; gap: 6px; color: var(--foreground, #1d2025); }
+.cat-needs p { margin: 0; font-size: 12px; }
 .help-list { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color: var(--muted-foreground); }
 .help-list li { margin-bottom: 4px; }
 .help-list b { color: var(--foreground); }

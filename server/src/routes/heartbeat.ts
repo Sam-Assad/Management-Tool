@@ -10,6 +10,8 @@ import { env } from '../env.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { latestArtemisCheck, isArtemis, describeArtemisSchedule, type ArtemisReport } from '../scan/artemis.js';
 import { checkArtemisNow } from '../heartbeat/artemisBeat.js';
+import { accountTroubles, markAccountsFixed } from '../scan/dbAccounts.js';
+import { recheckServices } from '../orchestrator/sequenceRunner.js';
 import type { CrashFacts } from '../scan/crashAlerts.js';
 
 export const heartbeatRouter = Router();
@@ -90,7 +92,8 @@ heartbeatRouter.get(
 );
 
 interface Alert {
-  kind: 'wildfly' | 'artemis' | 'crash';
+  // health: a running service that can't do its job (scan/serviceHealth.ts)
+  kind: 'wildfly' | 'artemis' | 'crash' | 'health';
   server_id: number;
   server_name: string;
   software_id: number;
@@ -103,26 +106,32 @@ interface Alert {
     first_crash_at: string;
     last_crash_at: string;
     ran_for_s: number | null;
+    // it crashes right after a start (not after running fine), and who started it then (a service_events source)
+    after_start: boolean;
+    started_source: string | null;
+    started_actor: string | null;
     reason: string | null;
     excerpt: string | null;
     facts: CrashFacts | null;
+    // stopped with the alert's Stop button (state 'stopped'), until someone starts it
+    stopped_by: string | null;
+    stopped_at: string | null;
   };
   checked_at: string | null;
 }
 
-// Services that had been running fine and keep crashing (scan/crashAlerts.ts), still crashing or given up on by
-// systemd, on services still in their server's list.
-function crashAlerts(): Alert[] {
+// Crash alerts (scan/crashAlerts.ts) in these states, on services still in their server's list.
+function crashAlerts(states: string[]): Alert[] {
   const rows = sqlite
     .prepare(
       `SELECT a.*, s.name AS server_name, sd.name AS software_name FROM crash_alerts a
        JOIN servers s ON s.id = a.server_id
        JOIN software_definitions sd ON sd.id = a.software_id
        JOIN group_software gs ON gs.group_id = s.group_id AND gs.software_id = a.software_id
-       WHERE a.state IN ('crashing', 'gave_up')
+       WHERE a.state IN (${states.map(() => '?').join(', ')})
        ORDER BY s.name, a.first_crash_at`,
     )
-    .all() as any[];
+    .all(...states) as any[];
   return rows.map((a) => ({
     kind: 'crash' as const,
     server_id: a.server_id,
@@ -136,18 +145,24 @@ function crashAlerts(): Alert[] {
       first_crash_at: a.first_crash_at,
       last_crash_at: a.last_crash_at,
       ran_for_s: a.ran_for_s,
+      after_start: a.ran_for_s !== null && a.ran_for_s < env.crashRunningFineMinutes * 60,
+      started_source: a.started_source,
+      started_actor: a.started_actor,
       reason: a.reason,
       excerpt: a.excerpt,
       facts: a.facts ? JSON.parse(a.facts) : null,
+      stopped_by: a.state === 'stopped' ? a.stopped_by : null,
+      stopped_at: a.state === 'stopped' ? (a.ended_at ?? a.stopped_at) : null,
     },
     // a new look (each check while it keeps crashing) brings a closed popup back
     checked_at: a.looked_at ?? a.updated_at,
   }));
 }
 
-// What the latest heartbeat found wrong with WildFly, on every server: running but unable to take traffic, or
-// with datasources that can't connect. Only beats count (not Start/Restart runs, which ask in their own popup),
-// and only while it's still the latest reading. The page pops a warning for each new one.
+// What the latest heartbeat found wrong, on every server: WildFly running but unable to take traffic, or with
+// datasources that can't connect; any service running but unable to do its job. Only beats count (not
+// Start/Restart runs, which ask in their own popup), and only while it's still the latest reading. The page pops a
+// warning for each new one.
 heartbeatRouter.get(
   '/alerts',
   asyncHandler(async (_req, res) => {
@@ -182,18 +197,18 @@ heartbeatRouter.get(
         ];
       }
       const status = getServerComponentStatus(row.server_id, row.server_name, row.software_id);
-      if (status.state !== 'not_ready' && status.state !== 'datasource_down') return [];
+      if (status.state !== 'not_ready' && status.state !== 'datasource_down' && status.state !== 'unhealthy') return [];
       const source = (latestSource.get(row.server_id, row.software_id) as { source: string } | undefined)?.source;
       if (source !== 'heartbeat') return [];
       return [
         {
-          kind: 'wildfly' as const,
+          kind: status.state === 'unhealthy' ? ('health' as const) : ('wildfly' as const),
           server_id: row.server_id,
           server_name: row.server_name,
           software_id: row.software_id,
           software_name: row.software_name,
           state: status.state,
-          // not_ready: the reason in words; datasource_down: the failed datasource names, comma-separated
+          // not_ready / unhealthy: the reason in words; datasource_down: the failed datasource names, comma-separated
           detail: status.detail,
           checked_at: status.checked_at,
         },
@@ -203,7 +218,9 @@ heartbeatRouter.get(
       interval_minutes: intervalMinutes(),
       artemis_schedule: describeArtemisSchedule(),
       crash_check_minutes: intervalMinutes(env.crashCheckCron),
-      alerts: [...crashAlerts(), ...alerts],
+      alerts: [...crashAlerts(['crashing', 'gave_up']), ...alerts],
+      // services stopped from a crash alert, still down: the server page says why
+      crash_stopped: crashAlerts(['stopped']),
     });
   })
 );
@@ -237,6 +254,24 @@ heartbeatRouter.post(
     const check = await checkArtemisNow(Number(req.params.serverId));
     if (!check) return res.status(404).json({ error: "This server doesn't have Artemis." });
     res.json(check);
+  })
+);
+
+// The services on a server whose database account the logs show locked / expired / refused, not marked fixed: where
+// "It's fixed" is offered (scan/dbAccounts.ts).
+heartbeatRouter.get('/servers/:serverId/db-account-troubles', (req, res) => {
+  res.json(accountTroubles(Number(req.params.serverId)).map(({ software_id, users }) => ({ software_id, users })));
+});
+
+// "It's fixed": someone says the account works again (unlocked, password renewed or corrected). Its errors so far are
+// left out on every service that signs in with it, and those are checked again now (read-only). A new error in a log
+// after this counts again.
+heartbeatRouter.post(
+  '/servers/:serverId/software/:softwareId/db-account-fixed',
+  asyncHandler(async (req, res) => {
+    const { users, recheck } = markAccountsFixed(Number(req.params.serverId), Number(req.params.softwareId), req.user?.username ?? null);
+    await recheckServices(recheck);
+    res.json({ users, rechecked: recheck.length });
   })
 );
 

@@ -239,6 +239,38 @@ CREATE TABLE IF NOT EXISTS service_snapshots (
   PRIMARY KEY (server_id, software_id)
 );
 
+-- Database account errors (locked, expired, wrong password) in each service's log since it last started, with the
+-- account it was about ('' when the log doesn't say), scan/dbAccounts.ts. Replaced at each check of that service;
+-- shown on every service that signs in with the same account.
+CREATE TABLE IF NOT EXISTS db_account_errors (
+  server_id INTEGER NOT NULL,
+  software_id INTEGER NOT NULL,
+  user_name TEXT NOT NULL,
+  db TEXT NOT NULL,
+  code TEXT NOT NULL,
+  text TEXT NOT NULL,
+  logged_at TEXT NOT NULL,
+  seen_at TEXT NOT NULL,
+  PRIMARY KEY (server_id, software_id, user_name, db, code)
+);
+
+-- The database accounts each service signs in with, as its last check read them (no passwords).
+CREATE TABLE IF NOT EXISTS service_db_accounts (
+  server_id INTEGER NOT NULL,
+  software_id INTEGER NOT NULL,
+  user_name TEXT NOT NULL,
+  db TEXT NOT NULL,
+  seen_at TEXT NOT NULL,
+  PRIMARY KEY (server_id, software_id, user_name, db)
+);
+
+-- "It's fixed": errors logged before fixed_at are left out. scope = 'account|<user>|<db>' or 'service|<server>|<software>'.
+CREATE TABLE IF NOT EXISTS db_account_fixes (
+  scope TEXT PRIMARY KEY,
+  fixed_at TEXT NOT NULL,
+  fixed_by TEXT
+);
+
 -- Sign-ins, failures, password changes and resets, user changes: who / what / when.
 CREATE TABLE IF NOT EXISTS auth_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -288,6 +320,17 @@ ensureColumn('service_events', 'until_at', 'TEXT');
 // a crash nobody asked for: how long the service had been running before it (seconds; null = since before
 // Healthcheck first looked) - "had been running fine" decides whether repeated crashes raise an alert
 ensureColumn('service_events', 'ran_for_s', 'INTEGER');
+// what a service must stay connected to while it runs (scan/serviceHealth.ts): 1 = Check status and the background
+// check flag it when it has no open connection to the database / Artemis
+ensureColumn('software_definitions', 'needs_database', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('software_definitions', 'needs_artemis', 'INTEGER NOT NULL DEFAULT 0');
+// crash alerts: who started the service before it began crashing (a service_events source, and the person), and
+// the alert's Stop button: the run that stopped it, who pressed it and when
+ensureColumn('crash_alerts', 'started_source', 'TEXT');
+ensureColumn('crash_alerts', 'started_actor', 'TEXT');
+ensureColumn('crash_alerts', 'stop_job_id', 'INTEGER');
+ensureColumn('crash_alerts', 'stopped_by', 'TEXT');
+ensureColumn('crash_alerts', 'stopped_at', 'TEXT');
 // an admin's authenticator app, for "Forgot password" (see auth/totp.ts): the secret, encrypted with master.key;
 // one being set up but not yet confirmed with a code; the last code's time step (each code works once); when it
 // was set up

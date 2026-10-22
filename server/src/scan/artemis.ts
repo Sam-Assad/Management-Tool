@@ -117,6 +117,18 @@ export function formatBytes(bytes: number): string {
 // `unit`: its systemd unit, whose main PID is the broker. Without one, the broker is the process running
 // "...boot.Artemis run" - matched as [b]oot so the search can't find its own shell, whose command line holds
 // the pattern too (a CLI `artemis queue stat` also carries -Dartemis.instance=, so that's no help either).
+// Sets PID (the broker's java process) and INST (its instance folder) in the script.
+function findBroker(unit?: string): string[] {
+  return [
+    unit ? `PID=$(systemctl show -p MainPID --value ${shQuote(unit)} 2>/dev/null); [ "$PID" = "0" ] && PID=""` : 'PID=""',
+    // a unit whose main process is a wrapper shell: the broker is its java child
+    `if [ -n "$PID" ] && [ "$(ps -o comm= -p "$PID" 2>/dev/null)" != "java" ]; then C=$(pgrep -P "$PID" java | head -1); [ -n "$C" ] && PID=$C; fi`,
+    `[ -n "$PID" ] || PID=$(pgrep -f '[b]oot[.]Artemis run' | head -1)`,
+    `INST=$(ps -o args= -p "$PID" 2>/dev/null | grep -oE 'artemis.instance=[^ ]+' | head -1 | cut -d= -f2)`,
+    `[ -n "$INST" ] || INST=${shQuote(env.artemisInstance)}`,
+  ];
+}
+
 export async function checkArtemis(client: Client, logPath?: string | null, unit?: string): Promise<ArtemisReport> {
   const report: ArtemisReport = {
     checked: false,
@@ -141,12 +153,7 @@ export async function checkArtemis(client: Client, logPath?: string | null, unit
     : 'echo "no log path"';
 
   const script = [
-    unit ? `PID=$(systemctl show -p MainPID --value ${shQuote(unit)} 2>/dev/null); [ "$PID" = "0" ] && PID=""` : 'PID=""',
-    // a unit whose main process is a wrapper shell: the broker is its java child
-    `if [ -n "$PID" ] && [ "$(ps -o comm= -p "$PID" 2>/dev/null)" != "java" ]; then C=$(pgrep -P "$PID" java | head -1); [ -n "$C" ] && PID=$C; fi`,
-    `[ -n "$PID" ] || PID=$(pgrep -f '[b]oot[.]Artemis run' | head -1)`,
-    `INST=$(ps -o args= -p "$PID" 2>/dev/null | grep -oE 'artemis.instance=[^ ]+' | head -1 | cut -d= -f2)`,
-    `[ -n "$INST" ] || INST=${shQuote(env.artemisInstance)}`,
+    ...findBroker(unit),
     `echo ${MARK} pid; echo "$PID"; echo "$INST"`,
     `echo ${MARK} args; ps -o args= -p "$PID" 2>/dev/null | tr ' ' '\\n' | grep -E '^-Xmx|^-XX:MaxHeapSize='`,
     `JCMD=$(command -v jcmd || echo "$(dirname "$(readlink -f /proc/$PID/exe 2>/dev/null)")/jcmd")`,
@@ -215,6 +222,51 @@ export async function checkArtemis(client: Client, logPath?: string | null, unit
         ? 'warning'
         : 'info';
   return report;
+}
+
+// ---- Clear DLQ ----------------------------------------------------------------------------------------
+// Deletes every message in the DLQ with the broker's own CLI (`artemis queue purge`), as the readings' Artemis
+// login. Hundreds of thousands of messages can take minutes, so it gets CLEAR_DLQ_TIMEOUT_S. --silent: the CLI
+// never stops to ask for a user or password.
+export const CLEAR_DLQ_TIMEOUT_S = 600;
+
+export interface PurgeOutcome {
+  ok: boolean;
+  problem: string | null; // why not, in plain words
+  technical: string; // what the CLI printed (password masked)
+}
+
+// What `artemis queue purge` answered (its output, then "exit=N").
+export function purgeOutcome(output: string): PurgeOutcome {
+  const exit = output.match(/exit=(\d+)\s*$/)?.[1];
+  const technical = output.replace(/exit=\d+\s*$/, '').trim();
+  const lastLine = technical.split('\n').map((l) => l.trim()).filter(Boolean).slice(-1)[0]?.slice(0, 200) ?? '';
+  let problem: string | null = null;
+  if (exit === '124') problem = `The broker didn't finish within ${CLEAR_DLQ_TIMEOUT_S / 60} minutes. It may still be deleting: Check now shows how many are left.`;
+  else if (/does not have permission|AMQ229032|AMQ229213/i.test(technical))
+    problem = `The broker refused: the Artemis account ${env.artemisUser} isn't allowed to delete messages. It needs the "manage" permission in the broker's security settings (broker.xml).`;
+  else if (/AMQ229031|Unable to validate user|AMQ119031/i.test(technical))
+    problem = `The broker refused the login of ${env.artemisUser}${env.artemisPassword ? '' : ' (ARTEMIS_PASSWORD is not set in .env)'}.`;
+  else if (/No such file or directory|command not found/i.test(technical)) problem = "Artemis's command-line tool (bin/artemis) wasn't found in its instance folder.";
+  else if (/AMQ229017|queue[^\n]*(does not exist|not found)/i.test(technical)) problem = 'This broker has no queue called DLQ.';
+  else if (exit !== '0' || /Exception|\bERROR\b|^Error/m.test(technical)) problem = `The broker didn't clear it: ${lastLine || 'no answer'}`;
+  return { ok: problem === null, problem, technical };
+}
+
+export async function clearDlq(client: Client, unit?: string): Promise<PurgeOutcome> {
+  const password = env.artemisPassword;
+  const hide = (text: string) => (password ? text.split(password).join('****') : text);
+  const script = [
+    ...findBroker(unit),
+    `timeout ${CLEAR_DLQ_TIMEOUT_S} "$INST/bin/artemis" queue purge --name DLQ --user ${shQuote(env.artemisUser)} --password ${shQuote(password)} --url ${shQuote(env.artemisUrl)} --silent 2>&1; echo "exit=$?"`,
+  ].join('\n');
+  try {
+    const res = await runCommand(client, `bash -c ${shQuote(script)} 2>&1`, (CLEAR_DLQ_TIMEOUT_S + 60) * 1000);
+    return purgeOutcome(hide(`${res.stdout}\n${res.stderr}`.trim()));
+  } catch (err: any) {
+    const technical = hide(String(err?.message ?? err)).slice(0, 300);
+    return { ok: false, problem: `Couldn't run the command on the server: ${technical}`, technical };
+  }
 }
 
 // ---- kept readings ------------------------------------------------------------------------------------

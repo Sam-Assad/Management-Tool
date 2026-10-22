@@ -58,7 +58,15 @@ export function getServerComponentStatus(
     // "not_ready:<why it can't take traffic>"
     state = 'not_ready';
     shownDetail = detail.slice('not_ready:'.length) || null;
-  } else if (row.status === 'up') state = 'running';
+  } else if (detail.startsWith('unhealthy')) {
+    // "unhealthy:<why it can't do its job>" (scan/serviceHealth.ts)
+    state = 'unhealthy';
+    shownDetail = detail.slice('unhealthy:'.length) || null;
+  } else if (row.status === 'up') {
+    state = 'running';
+    // "running:<note>": its log reported a recent connection error, nothing else is wrong
+    shownDetail = detail.startsWith('running:') ? detail.slice('running:'.length) : null;
+  }
   else state = KNOWN_STATES.includes(detail) ? detail : 'stopped';
   return {
     server_id: serverId,

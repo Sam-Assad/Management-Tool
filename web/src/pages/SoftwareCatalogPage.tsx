@@ -19,6 +19,8 @@ const empty = {
   success_pattern: '',
   error_pattern: String.raw`\b(ERROR|FATAL|SEVERE)\b|APPLICATION FAILED TO START`,
   health_timeout_s: 120,
+  needs_database: 0,
+  needs_artemis: 0,
 };
 
 export default function SoftwareCatalogPage() {
@@ -45,6 +47,8 @@ export default function SoftwareCatalogPage() {
       success_pattern: def.success_pattern ?? '',
       error_pattern: def.error_pattern ?? '',
       health_timeout_s: def.health_timeout_s,
+      needs_database: def.needs_database ? 1 : 0,
+      needs_artemis: def.needs_artemis ? 1 : 0,
     });
     setShowModal(true);
   }
@@ -84,7 +88,7 @@ export default function SoftwareCatalogPage() {
       <button className="primary" onClick={startCreate}>+ Add software</button>
 
       <table className="table" style={{ marginTop: 16 }}>
-        <thead><tr><th>Name</th><th>Kind</th><th>Detect</th><th>Restart method</th><th>Start command</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Kind</th><th>Detect</th><th>Restart method</th><th>Start command</th><th>Needs</th><th></th></tr></thead>
         <tbody>
           {data?.map((def: any) => (
             <tr key={def.id}>
@@ -93,6 +97,7 @@ export default function SoftwareCatalogPage() {
               <td>{def.detect_method}: {def.detect_value}</td>
               <td>{def.restart_method}</td>
               <td className="muted">{def.start_cmd || '(none set)'}</td>
+              <td className="muted">{[def.needs_database ? 'database' : null, def.needs_artemis ? 'Artemis' : null].filter(Boolean).join(', ') || '—'}</td>
               <td>
                 <button onClick={() => startEdit(def)}>Edit</button>
                 <button onClick={() => deleteDef.mutate(def.id)}>Delete</button>
@@ -204,6 +209,29 @@ export default function SoftwareCatalogPage() {
                   onChange={(e) => setForm({ ...form, health_timeout_s: Number(e.target.value) })}
                 />
               </label>
+              <fieldset className="cat-needs">
+                <legend>While it runs, it must stay connected to</legend>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.needs_database)}
+                    onChange={(e) => setForm({ ...form, needs_database: e.target.checked ? 1 : 0 })}
+                  />{' '}
+                  Needs the database
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.needs_artemis)}
+                    onChange={(e) => setForm({ ...form, needs_artemis: e.target.checked ? 1 : 0 })}
+                  />{' '}
+                  Needs Artemis
+                </label>
+                <p className="muted">
+                  Check status and the background check flag it as "Running, but not working" when it has no open connection to it.
+                  Tick only what it keeps a connection to all the time.
+                </p>
+              </fieldset>
               <div className="button-row">
                 <button type="submit" className="primary">
                   {editingId ? 'Save changes' : 'Add to catalog'}
